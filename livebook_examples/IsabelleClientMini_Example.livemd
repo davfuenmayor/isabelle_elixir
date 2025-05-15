@@ -1,0 +1,531 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# Isabelle Client
+
+```elixir
+Mix.install([  
+  {:isabelle_elixir, "~> 0.1"},
+])
+```
+
+## Optional: Start Isabelle locally
+
+**Optionally**: If you want to start (and list) Isabelle servers programmatically via the function `new_server` (and `list_servers`) you have to make sure that the `<isabelle_install_folder>/bin` directory is in the PATH. Note that this only works if running Livebook directly on the host where Isabelle is installed (if running Livebook from a container this won't work without additional tweaking).
+
+```elixir
+System.get_env("PATH")
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+"/data/isabelle/bin:/usr/local/lib/erlang/erts-15.2.2/bin:/usr/local/lib/erlang/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+```
+
+Uncomment (and modify) below to add Isabelle's `bin` folder to PATH (if you haven't done already).
+
+```elixir
+#isabelle_dir = "/data/isabelle"
+#System.put_env("PATH", isabelle_dir <> "/bin:" <> System.get_env("PATH"))
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+nil
+```
+
+Smoke test your setup by getting a list of currently running Isabelle servers on your machine.
+
+```elixir
+#server_info = IsabelleClientMini.list_servers()
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  %{
+    "host" => "127.0.0.1",
+    "name" => "my",
+    "password" => "e7b5c739-ac69-4588-817b-f1669629f348",
+    "port" => "9998"
+  }
+]
+```
+
+Start a server (in case of trouble double-check for port collisions)
+
+```elixir
+#server_info = IsabelleClientMini.new_server("my", 9998)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  %{
+    "host" => "127.0.0.1",
+    "name" => "my",
+    "password" => "e7b5c739-ac69-4588-817b-f1669629f348",
+    "port" => "9998"
+  }
+]
+```
+
+## Connecting to an Isabelle Server
+
+Assume you have an Isabelle server instance running in `host` and listening to `port` (for example you ran `isabelle server -n <name> -p <port>` on `host` where Isabelle has been installed,  or alternatively via the function `new_server`).
+You can connect to this instance and get a socket (an instance of `Port`).
+
+```elixir
+pw = "4d450549-5afc-43cd-8684-323ec2630fc5" # you get this from Isabelle CLI when starting server
+host = "127.0.0.1"
+port = 9999
+socket = IsabelleClientMini.connect(pw, host, port)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+#Port<0.22>
+```
+
+## Using Isabelle Server
+
+```elixir
+import IsabelleClientMini
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+IsabelleClientMini
+```
+
+```elixir
+echo(socket, %{value: 3})
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok, %{"value" => 3}}
+```
+
+```elixir
+help(socket)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok,
+ ["cancel", "echo", "help", "purge_theories", "session_build", "session_start", "session_stop",
+  "shutdown", "use_theories"]}
+```
+
+Interactions with Isabelle occur in the context of a session. See [Isabelle System Manual](https://isabelle.in.tum.de/doc/system.pdf) for details.
+Simple examples can be done in the context of `Main`.
+
+```elixir
+start_session(socket, %{session: "Main"})
+Process.sleep(5_000) # Building the session takes some time
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+We poll the status of the previous invocation (session start). The status object has useful information for further tasks (in particuular the current `session_id`).
+
+```elixir
+status = poll_status(socket)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session Pure/Pure",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session Misc/Tools",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session HOL/HOL (main)",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session Doc/Main (doc)",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session Pure/Pure",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session Misc/Tools",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session HOL/HOL (main)",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Session Doc/Main (doc)",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "true"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "Starting session Main ...",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "verbose" => "false"
+  },
+  finished: %{
+    "session_id" => "ed1378dc-f5b4-4df9-a103-ecd04c5bdb11",
+    "task" => "a53ea6a2-5d29-4a74-954d-bcf3136486d7",
+    "tmp_dir" => "/tmp/isabelle-mx/server_session13878966386288091748"
+  }
+]
+```
+
+We extract the `session_id` of the `Main` session we started before and save it for further use.
+
+```elixir
+session_id = extract_session(status)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+"ed1378dc-f5b4-4df9-a103-ecd04c5bdb11"
+```
+
+Isabelle proof (and model generation) problems are given in the context of "theories", which are read from homonymous files having extension .thy). Below we create one that declares a new type `i` and an (arbitrary) relation `R` on `i`s. It uses [Sledgehammer](https://lawrencecpaulson.github.io/2022/04/13/Sledgehammer.html) to mathematically prove that reflexivity and euclideanness together entail transitivity, and to disprove some other random conjecture (by finding a counterexample using [Nitpick](https://isabelle.in.tum.de/doc/nitpick.pdf)).
+
+```elixir
+theory = ~S"""
+theory Problem imports Main
+begin
+
+typedecl i
+consts R::"i \<Rightarrow> i \<Rightarrow> bool"
+
+axiomatization where
+reflexive: "\<forall>x. R x x" and
+euclidean: "\<forall>x y z. R x y \<and> R x z \<longrightarrow> R y z"
+
+theorem transitive: "\<forall>x y z. R x y \<and> R y z \<longrightarrow> R x z"
+  sledgehammer
+  oops
+
+theorem conjecture: "\<forall>x y z. R x y \<or> R y z \<longrightarrow> R x z"
+  nitpick[user_axioms=true, show_all, format=3, card i = 3, atoms = "a b c" ]
+  oops
+
+  end
+"""
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+"theory Problem imports Main\nbegin\n\ntypedecl i\nconsts R::\"i \\<Rightarrow> i \\<Rightarrow> bool\"\n\naxiomatization where\nreflexive: \"\\<forall>x. R x x\" and\neuclidean: \"\\<forall>x y z. R x y \\<and> R x z \\<longrightarrow> R y z\"\n\ntheorem transitive: \"\\<forall>x y z. R x y \\<and> R y z \\<longrightarrow> R x z\"\n  sledgehammer\n  oops\n\ntheorem conjecture: \"\\<forall>x y z. R x y \\<or> R y z \\<longrightarrow> R x z\"\n  nitpick[user_axioms=true, show_all, format=3, card i = 3, atoms = \"a b c\" ]\n  oops\n\n  end\n"
+```
+
+Unfortunately the Isabelle server doesn't support sending theories over the wire.
+So we have to save the theory in a (for Isabelle accessible) location in disk.
+**Modify the path below according to your own Livebook setup**
+
+```elixir
+# The path below is the one seen by Livebook (possibly different if running inside a container)
+path_wrt_livebook = "/data/problems/"
+File.write!(path_wrt_livebook <> "Problem.thy", theory)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+We send the previously saved theory to Isabelle for formal verification by invoking `use_theories` (and passing it the corresponding parameters as an `args` Map). **Modify the path below according to your own setup!**
+
+```elixir
+# The path below is the one seen by Isabelle (possibly different than the one seen by Livebook
+# if running in different hosts/containers)
+path_wrt_isabelle = "/home/me/<some_folder>/problems/"
+
+args = %{
+  "session_id" => session_id,
+  "theories" => ["Problem"],
+  "master_dir" => path_wrt_isabelle
+}
+
+{:ok, _} = use_theories(socket, args)
+# This might take some time
+Process.sleep(5_000)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+```elixir
+theory_status = poll_status(socket) # Poll until you get the results
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  note: %{
+    "kind" => "writeln",
+    "message" => "theory Draft.Problem 100%",
+    "percentage" => 100,
+    "session" => "",
+    "task" => "0f0c023a-2393-4d02-8d61-66a3e1904471",
+    "theory" => "Draft.Problem"
+  },
+  finished: %{
+    "errors" => [],
+    "nodes" => [
+      %{
+        "exports" => [],
+        "messages" => [
+          %{
+            "kind" => "writeln",
+            "message" => "Sledgehammering...",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "vampire found a proof...",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "spass found a proof...",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "zipperposition found a proof...",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "e found a proof...",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "vampire: Try this: by (meson Problem.reflexive euclidean) (17 ms)",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "e: Duplicate proof",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "spass: Duplicate proof",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "zipperposition: Duplicate proof",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "Done",
+            "pos" => %{
+              "end_offset" => 231,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 219
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "Nitpicking formula...",
+            "pos" => %{
+              "end_offset" => 301,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 16,
+              "offset" => 294
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "Nitpick found a counterexample for card i = 3:\n  Skolem constants:\n    x = a\n    y = b\n    z = b\n  Constant:\n    R = (\\<lambda>x. _)\n        ((a, a) := True, (a, b) := False, (a, c) := False, (b, a) := False,\n           (b, b) := True, (b, c) := False, (c, a) := False,\n           (c, b) := False, (c, c) := True)",
+            "pos" => %{
+              "end_offset" => 301,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 16,
+              "offset" => 294
+            }
+          }
+        ],
+        "node_name" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+        "status" => %{
+          "canceled" => false,
+          "consolidated" => true,
+          "failed" => 0,
+          "finished" => 22,
+          "ok" => true,
+          "percentage" => 100,
+          "running" => 0,
+          "total" => 22,
+          "unprocessed" => 0,
+          "warned" => 0
+        },
+        "theory_name" => "Draft.Problem"
+      }
+    ],
+    "ok" => true,
+    "task" => "0f0c023a-2393-4d02-8d61-66a3e1904471"
+  }
+]
+```
+
+```elixir
+result = extract_results(theory_status)
+ IO.puts result
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+Sledgehammering...
+vampire found a proof...
+spass found a proof...
+zipperposition found a proof...
+e found a proof...
+vampire: Try this: by (meson Problem.reflexive euclidean) (17 ms)
+e: Duplicate proof
+spass: Duplicate proof
+zipperposition: Duplicate proof
+Done
+Nitpicking formula...
+Nitpick found a counterexample for card i = 3:
+  Skolem constants:
+    x = a
+    y = b
+    z = b
+  Constant:
+    R = (\<lambda>x. _)
+        ((a, a) := True, (a, b) := False, (a, c) := False, (b, a) := False,
+           (b, b) := True, (b, c) := False, (c, a) := False,
+           (c, b) := False, (c, c) := True)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+We can further parse the resulting string for downstream processing.
+
+```elixir
+symbol = "R"
+
+value =
+  result
+  |> String.split("Constant:\n", parts: 2)
+  |> Enum.at(1)
+  |> String.trim()
+  |> String.split("#{symbol} =", parts: 2)
+  |> Enum.at(1)
+
+IO.puts(value)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+ (\<lambda>x. _)
+        ((a, a) := True, (a, b) := False, (a, c) := False, (b, a) := False,
+           (b, b) := True, (b, c) := False, (c, a) := False,
+           (c, b) := False, (c, c) := True)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+

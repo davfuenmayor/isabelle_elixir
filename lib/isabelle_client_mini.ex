@@ -10,12 +10,7 @@ defmodule IsabelleClientMini do
   commands (`session_start`, `use_theories`, …) and consume the streamed
   results without having to parse the Isabelle wire protocol yourself.
 
-  ```text
-  +--------------+                    +----------------+
-  | Your Elixir  |  TCP (line JSON)   |  Isabelle JVM  |
-  |  Process     | <----------------> |  Server        |
-  +--------------+                    +----------------+
-  ````
+
   ### Typical lifecycle
 
   1. (optionally) **Start** a resident server with `new_server/2` (or reuse
@@ -31,7 +26,8 @@ defmodule IsabelleClientMini do
   7. (optionally) **Shutdown** the server (`shutdown_server/1`).
      If running Isabelle locally you can alternatively use `kill_server/1`.
 
-   ### Caveats
+
+  ### Caveats
 
   * The client is intentionally **stateless** — it does **not** keep
     supervision trees, reconnect, or monitor server liveness for you.  Compose
