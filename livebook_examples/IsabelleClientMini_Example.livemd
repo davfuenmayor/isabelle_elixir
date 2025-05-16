@@ -233,26 +233,25 @@ begin
 typedecl i
 consts R::"i \<Rightarrow> i \<Rightarrow> bool"
 
-axiomatization where
-reflexive: "\<forall>x. R x x" and
-euclidean: "\<forall>x y z. R x y \<and> R x z \<longrightarrow> R y z"
+abbreviation "reflexive \<equiv> \<forall> x. R x x"
+abbreviation "euclidean \<equiv> \<forall> x y z. R x y \<and> R x z \<longrightarrow> R y z" 
+abbreviation "transitive \<equiv> \<forall> x y z. R x y \<and> R y z \<longrightarrow> R x z" 
 
-theorem transitive: "\<forall>x y z. R x y \<and> R y z \<longrightarrow> R x z"
+theorem "reflexive \<and> euclidean \<longrightarrow> transitive"
   sledgehammer
   oops
 
-theorem conjecture: "\<forall>x y z. R x y \<or> R y z \<longrightarrow> R x z"
-  nitpick[user_axioms=true, show_all, format=3, card i = 3, atoms = "a b c" ]
-  oops
+proposition "reflexive \<and> transitive \<longrightarrow> euclidean"
+  nitpick[card = 4, show_all, format = 2, atoms= a b c d] oops
 
-  end
+end
 """
 ```
 
 <!-- livebook:{"output":true} -->
 
 ```
-"theory Problem imports Main\nbegin\n\ntypedecl i\nconsts R::\"i \\<Rightarrow> i \\<Rightarrow> bool\"\n\naxiomatization where\nreflexive: \"\\<forall>x. R x x\" and\neuclidean: \"\\<forall>x y z. R x y \\<and> R x z \\<longrightarrow> R y z\"\n\ntheorem transitive: \"\\<forall>x y z. R x y \\<and> R y z \\<longrightarrow> R x z\"\n  sledgehammer\n  oops\n\ntheorem conjecture: \"\\<forall>x y z. R x y \\<or> R y z \\<longrightarrow> R x z\"\n  nitpick[user_axioms=true, show_all, format=3, card i = 3, atoms = \"a b c\" ]\n  oops\n\n  end\n"
+"theory Problem imports Main\nbegin\n\ntypedecl i\nconsts R::\"i \\<Rightarrow> i \\<Rightarrow> bool\"\n\nabbreviation \"reflexive \\<equiv> \\<forall> x. R x x\"\nabbreviation \"euclidean \\<equiv> \\<forall> x y z. R x y \\<and> R x z \\<longrightarrow> R y z\" \nabbreviation \"transitive \\<equiv> \\<forall> x y z. R x y \\<and> R y z \\<longrightarrow> R x z\" \n\ntheorem \"reflexive \\<and> euclidean \\<longrightarrow> transitive\"\n  sledgehammer\n  oops\n\nproposition \"reflexive \\<and> transitive \\<longrightarrow> euclidean\"\n  nitpick[card = 4, show_all, format = 2, atoms= a b c d] oops\n\nend\n"
 ```
 
 Unfortunately the Isabelle server doesn't support sending theories over the wire.
@@ -276,7 +275,7 @@ We send the previously saved theory to Isabelle for formal verification by invok
 ```elixir
 # The path below is the one seen by Isabelle (possibly different than the one seen by Livebook
 # if running in different hosts/containers)
-path_wrt_isabelle = "/home/me/<some_folder>/problems/"
+path_wrt_isabelle = "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/"
 
 args = %{
   "session_id" => session_id,
@@ -305,10 +304,26 @@ theory_status = poll_status(socket) # Poll until you get the results
 [
   note: %{
     "kind" => "writeln",
+    "message" => "theory Draft.Problem 3%",
+    "percentage" => 3,
+    "session" => "",
+    "task" => "90bfbf6b-be83-493a-9efb-7b3a28712058",
+    "theory" => "Draft.Problem"
+  },
+  note: %{
+    "kind" => "writeln",
+    "message" => "theory Draft.Problem 99%",
+    "percentage" => 99,
+    "session" => "",
+    "task" => "90bfbf6b-be83-493a-9efb-7b3a28712058",
+    "theory" => "Draft.Problem"
+  },
+  note: %{
+    "kind" => "writeln",
     "message" => "theory Draft.Problem 100%",
     "percentage" => 100,
     "session" => "",
-    "task" => "0f0c023a-2393-4d02-8d61-66a3e1904471",
+    "task" => "90bfbf6b-be83-493a-9efb-7b3a28712058",
     "theory" => "Draft.Problem"
   },
   finished: %{
@@ -319,122 +334,152 @@ theory_status = poll_status(socket) # Poll until you get the results
         "messages" => [
           %{
             "kind" => "writeln",
+            "message" => "consts\n  reflexive :: \"bool\"",
+            "pos" => %{
+              "end_offset" => 85,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 7,
+              "offset" => 73
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "consts\n  euclidean :: \"bool\"",
+            "pos" => %{
+              "end_offset" => 123,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 8,
+              "offset" => 111
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "consts\n  transitive :: \"bool\"",
+            "pos" => %{
+              "end_offset" => 182,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 9,
+              "offset" => 170
+            }
+          },
+          %{
+            "kind" => "writeln",
             "message" => "Sledgehammering...",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
+              "offset" => 278
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "verit found a proof...",
+            "pos" => %{
+              "end_offset" => 290,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 278
+            }
+          },
+          %{
+            "kind" => "writeln",
+            "message" => "cvc5 found a proof...",
+            "pos" => %{
+              "end_offset" => 290,
+              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
+              "line" => 12,
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
             "message" => "vampire found a proof...",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
-            }
-          },
-          %{
-            "kind" => "writeln",
-            "message" => "spass found a proof...",
-            "pos" => %{
-              "end_offset" => 231,
-              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
-              "line" => 12,
-              "offset" => 219
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
             "message" => "zipperposition found a proof...",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
-            "message" => "e found a proof...",
+            "message" => "verit: Try this: by metis (29 ms)",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
-            "message" => "vampire: Try this: by (meson Problem.reflexive euclidean) (17 ms)",
+            "message" => "cvc5: Try this: by meson (33 ms)",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
-            "message" => "e: Duplicate proof",
+            "message" => "vampire: Duplicate proof",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
-            }
-          },
-          %{
-            "kind" => "writeln",
-            "message" => "spass: Duplicate proof",
-            "pos" => %{
-              "end_offset" => 231,
-              "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
-              "line" => 12,
-              "offset" => 219
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
             "message" => "zipperposition: Duplicate proof",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
             "message" => "Done",
             "pos" => %{
-              "end_offset" => 231,
+              "end_offset" => 290,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 12,
-              "offset" => 219
+              "offset" => 278
             }
           },
           %{
             "kind" => "writeln",
             "message" => "Nitpicking formula...",
             "pos" => %{
-              "end_offset" => 301,
+              "end_offset" => 357,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 16,
-              "offset" => 294
+              "offset" => 350
             }
           },
           %{
             "kind" => "writeln",
-            "message" => "Nitpick found a counterexample for card i = 3:\n  Skolem constants:\n    x = a\n    y = b\n    z = b\n  Constant:\n    R = (\\<lambda>x. _)\n        ((a, a) := True, (a, b) := False, (a, c) := False, (b, a) := False,\n           (b, b) := True, (b, c) := False, (c, a) := False,\n           (c, b) := False, (c, c) := True)",
+            "message" => "Nitpick found a counterexample for card i = 4:\n  Skolem constants:\n    x = a\n    y = b\n    z = c\n  Constant:\n    R = (\\<lambda>x. _)\n        ((a, a) := True, (a, b) := True, (a, c) := True, (a, d) := True,\n           (b, a) := False, (b, b) := True, (b, c) := False,\n           (b, d) := False, (c, a) := False, (c, b) := True, (c, c) := True,\n           (c, d) := True, (d, a) := False, (d, b) := False,\n           (d, c) := False, (d, d) := True)",
             "pos" => %{
-              "end_offset" => 301,
+              "end_offset" => 357,
               "file" => "/home/mx/Dropbox/AISE-Auto/livebook-local/problems/Problem.thy",
               "line" => 16,
-              "offset" => 294
+              "offset" => 350
             }
           }
         ],
@@ -443,11 +488,11 @@ theory_status = poll_status(socket) # Poll until you get the results
           "canceled" => false,
           "consolidated" => true,
           "failed" => 0,
-          "finished" => 22,
+          "finished" => 26,
           "ok" => true,
           "percentage" => 100,
           "running" => 0,
-          "total" => 22,
+          "total" => 26,
           "unprocessed" => 0,
           "warned" => 0
         },
@@ -455,7 +500,7 @@ theory_status = poll_status(socket) # Poll until you get the results
       }
     ],
     "ok" => true,
-    "task" => "0f0c023a-2393-4d02-8d61-66a3e1904471"
+    "task" => "90bfbf6b-be83-493a-9efb-7b3a28712058"
   }
 ]
 ```
@@ -468,27 +513,35 @@ result = extract_results(theory_status)
 <!-- livebook:{"output":true} -->
 
 ```
+consts
+  reflexive :: "bool"
+consts
+  euclidean :: "bool"
+consts
+  transitive :: "bool"
 Sledgehammering...
+verit found a proof...
+cvc5 found a proof...
 vampire found a proof...
-spass found a proof...
 zipperposition found a proof...
-e found a proof...
-vampire: Try this: by (meson Problem.reflexive euclidean) (17 ms)
-e: Duplicate proof
-spass: Duplicate proof
+verit: Try this: by metis (29 ms)
+cvc5: Try this: by meson (33 ms)
+vampire: Duplicate proof
 zipperposition: Duplicate proof
 Done
 Nitpicking formula...
-Nitpick found a counterexample for card i = 3:
+Nitpick found a counterexample for card i = 4:
   Skolem constants:
     x = a
     y = b
-    z = b
+    z = c
   Constant:
     R = (\<lambda>x. _)
-        ((a, a) := True, (a, b) := False, (a, c) := False, (b, a) := False,
-           (b, b) := True, (b, c) := False, (c, a) := False,
-           (c, b) := False, (c, c) := True)
+        ((a, a) := True, (a, b) := True, (a, c) := True, (a, d) := True,
+           (b, a) := False, (b, b) := True, (b, c) := False,
+           (b, d) := False, (c, a) := False, (c, b) := True, (c, c) := True,
+           (c, d) := True, (d, a) := False, (d, b) := False,
+           (d, c) := False, (d, d) := True)
 ```
 
 <!-- livebook:{"output":true} -->
@@ -517,9 +570,11 @@ IO.puts(value)
 
 ```
  (\<lambda>x. _)
-        ((a, a) := True, (a, b) := False, (a, c) := False, (b, a) := False,
-           (b, b) := True, (b, c) := False, (c, a) := False,
-           (c, b) := False, (c, c) := True)
+        ((a, a) := True, (a, b) := True, (a, c) := True, (a, d) := True,
+           (b, a) := False, (b, b) := True, (b, c) := False,
+           (b, d) := False, (c, a) := False, (c, b) := True, (c, c) := True,
+           (c, d) := True, (d, a) := False, (d, b) := False,
+           (d, c) := False, (d, d) := True)
 ```
 
 <!-- livebook:{"output":true} -->
@@ -528,4 +583,71 @@ IO.puts(value)
 :ok
 ```
 
+```elixir
+rel =
+~r/\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*:=\s*True/
+|> Regex.scan(value, capture: :all_but_first)
+|> Enum.map(fn [a, b] -> {String.to_atom(a), String.to_atom(b)} end)
+|> MapSet.new()
+```
 
+<!-- livebook:{"output":true} -->
+
+```
+MapSet.new([a: :a, a: :b, a: :c, a: :d, b: :b, c: :b, c: :c, c: :d, d: :d])
+```
+
+The extracted `MapSet` (as a counterexample to our conjecture) represents a binary relation that is reflexive and transitive but not euclidean.
+For example , we can convert this into a directed graph using Erlang stdlib module `digraph` and use corresponding library functionality.
+
+```elixir
+g = :digraph.new()
+
+# 1) Add every unique vertex first
+rel
+|> Enum.flat_map(fn {u, v} -> [u, v] end)
+|> Enum.uniq()
+|> Enum.each(&:digraph.add_vertex(g, &1))
+# 2) Add directed edges for each pair
+Enum.each(rel, fn {u, v} -> :digraph.add_edge(g, u, v) end)
+g
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:digraph, #Reference<0.3715232518.1354104836.13731>, #Reference<0.3715232518.1354104836.13732>,
+ #Reference<0.3715232518.1354104836.13733>, true}
+```
+
+```elixir
+:digraph.edges(g)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  [:"$e" | 1],
+  [:"$e" | 6],
+  [:"$e" | 0],
+  [:"$e" | 2],
+  [:"$e" | 4],
+  [:"$e" | 7],
+  [:"$e" | 3],
+  [:"$e" | 8],
+  [:"$e" | 5]
+]
+```
+
+A topological sorting is a graph traversal in which each node v is visited only after all its dependencies are visited.
+
+```elixir
+:digraph_utils.topsort(g)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[:a, :c, :b, :d]
+```
