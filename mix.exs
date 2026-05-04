@@ -5,13 +5,13 @@ defmodule Isabelle.MixProject do
   def project do
     [
       app: :isabelle_elixir,
-      version: "0.1.0",
-      elixir: "~> 1.18",
+      version: "0.2.0",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
 
       # Hex / docs metadata
-      description: "Elixir bindings and utilities for the Isabelle proof assistant",
+      description: "Elixir client for the Isabelle proof assistant",
       source_url: "https://github.com/davfuenmayor/isabelle_elixir",
       homepage_url: "https://isabelle.in.tum.de",
       package: [
@@ -35,7 +35,6 @@ defmodule Isabelle.MixProject do
   # ------------ Dependencies ----------------------------------------------
   defp deps do
     [
-      {:json, "~> 1.4"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end

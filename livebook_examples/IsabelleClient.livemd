@@ -1,0 +1,166 @@
+# IsabelleClient
+
+## Section
+
+`IsabelleClient` is the ordinary user-facing client. It keeps the socket and
+current `session_id` in a struct, which makes session workflows less noisy than
+the stateless Mini API.
+
+This notebook does the following:
+
+* verify no-session errors
+* run synchronous commands
+* build and start `HOL`
+* check a tiny theory without manually passing `session_id`
+* purge, stop, and shut down cleanly
+
+## Setup
+
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.2"}`.
+
+```elixir
+Mix.install([
+  {:isabelle_elixir, path: Path.expand("..", __DIR__)}
+])
+```
+
+You need to make sure that the `isabelle` executable is in the `PATH`.
+
+```elixir
+System.find_executable("isabelle")
+```
+
+## Start And Connect
+
+Server lifecycle still lives in `IsabelleClientMini`, because it is independent
+from the client style used after connection.
+
+```elixir
+server_name = "livebook_client_#{System.unique_integer([:positive])}"
+{:ok, [server]} = IsabelleClientMini.new_server(server_name, 0)
+
+{:ok, client} =
+  IsabelleClient.connect(server["password"], host: server["host"], port: server["port"])
+
+client
+```
+
+## Guard Rails Before A Session Exists
+
+The stateful client refuses session-dependent operations until a session has
+actually been started.
+
+```elixir
+{
+  IsabelleClient.use_theories(client),
+  IsabelleClient.purge_theories(client),
+  IsabelleClient.stop_session(client)
+}
+```
+
+## Synchronous Commands
+
+```elixir
+{:ok, commands} = IsabelleClient.help(client)
+commands
+```
+
+```elixir
+{:ok, "some string"} = IsabelleClient.echo(client, "some string")
+```
+
+```elixir
+{:ok, %{"client" => "stateful", "raw" => true}} =
+  IsabelleClient.command(client, "echo", %{"client" => "stateful", "raw" => true})
+```
+
+## Build And Start A Session
+
+The high-level client awaits async tasks for you in `build_session/3`,
+`start_session/3`, `use_theories/3`, and `stop_session/2`.
+
+```elixir
+{:ok, build_task} =
+  IsabelleClient.build_session(client, %{"session" => "HOL"}, 120_000)
+
+{build_task.status, build_task.result["ok"], length(build_task.notes)}
+```
+
+```elixir
+{:ok, client, start_task} =
+  IsabelleClient.start_session(client, %{"session" => "HOL"}, 120_000)
+
+{client.session_id, start_task.status, start_task.result}
+```
+
+## Check A Theory
+
+Isabelle reads theories from disk, so the notebook creates a temporary directory.
+
+```elixir
+theory_dir =
+  Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_stateful_#{System.unique_integer([:positive])}")
+File.mkdir_p!(theory_dir)
+theory_dir
+```
+
+Unlike the "mini" client, this call does not need `"session_id"` in the argument map. The
+client inserts its current session id.
+
+```elixir
+File.write!(Path.join(theory_dir, "Example.thy"), """
+theory Example imports Main
+begin
+
+theorem "x = x"
+  sledgehammer by simp
+
+proposition "x = y"
+  nitpick oops
+
+end
+""")
+```
+
+```elixir
+{:ok, use_task} =
+  IsabelleClient.use_theories(
+    client,
+    %{"theories" => ["Example"], "master_dir" => theory_dir},
+    120_000
+  )
+
+{use_task.status, use_task.result["ok"], use_task.result["errors"]}
+```
+
+```elixir
+results = IsabelleClientMini.extract_results(use_task)
+```
+
+```elixir
+{:ok, purge_result} =
+  IsabelleClient.purge_theories(client, %{
+    "theories" => ["Example"],
+    "master_dir" => theory_dir
+  })
+
+{purge_result["purged"], purge_result["retained"]}
+```
+
+## Stop And Shutdown
+
+Stopping the session returns an updated client with `session_id: nil`.
+
+```elixir
+{:ok, client, stop_task} = IsabelleClient.stop_session(client, 120_000)
+{client.session_id, stop_task.status, stop_task.result}
+```
+
+```elixir
+{:ok, nil} = IsabelleClient.shutdown_server(client)
+:ok = IsabelleClient.close(client)
+```
+
+```elixir
+IsabelleClientMini.kill_server(server_name)
+```

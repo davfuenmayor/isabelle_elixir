@@ -1,0 +1,201 @@
+# IsabelleClientMini
+
+## Section
+
+`IsabelleClientMini` is the bare-bones client. It exposes the TCP socket and
+keeps no state. That is useful when you want a tiny protocol building block or
+you want to own all lifecycle decisions yourself.
+
+This notebook does the following:
+
+* start and discover a local Isabelle server
+* connect with the server password
+* run `help`, `echo`, and raw `command`
+* exercise `cancel`, `session_build`, `session_start`, `use_theories`,
+  `purge_theories`, `session_stop`, and `shutdown`
+* extract messages from the finished theory task
+
+## Setup
+
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.2"}`.
+
+```elixir
+Mix.install([
+  {:isabelle_elixir, path: Path.expand("..", __DIR__)}
+])
+```
+
+You need to make sure that the `isabelle` executable is in the `PATH`.
+
+```elixir
+System.find_executable("isabelle")
+```
+
+## Start And Discover A Server
+
+Passing port `0` asks Isabelle to choose a free local port. The returned map is
+the connection descriptor: host, port, server name, and password.
+
+```elixir
+server_name = "livebook_mini_#{System.unique_integer([:positive])}"
+{:ok, [server]} = IsabelleClientMini.new_server(server_name, 0)
+server
+```
+
+`list_servers/0` goes through Isabelle's local server registry. This is handy
+when a server was started outside of Elixir.
+
+```elixir
+{:ok, servers} = IsabelleClientMini.list_servers()
+```
+
+## Connect
+
+Mini returns a raw socket. All later calls receive that socket explicitly.
+
+```elixir
+{:ok, socket} =
+  IsabelleClientMini.connect(server["password"], server["host"], server["port"])
+socket
+```
+
+## Synchronous Commands
+
+`help` is a simple command. Isabelle may return the response as a short line or
+as a byte-length-framed message; Mini hides that framing detail.
+
+```elixir
+{:ok, commands} = IsabelleClientMini.help(socket)
+commands
+```
+
+`echo` is useful because it round-trips arbitrary JSON values. The long string
+forces Isabelle's long-message framing path.
+
+```elixir
+{:ok, echoed} =
+  IsabelleClientMini.echo(socket, %{
+    "client" => "mini",
+    "framed" => String.duplicate("x", 120)
+  })
+echoed
+```
+
+The raw `command/3` escape hatch is still there for server commands that do not
+deserve their own helper yet.
+
+```elixir
+{:ok, %{"client" => "mini", "raw" => true}} =
+  IsabelleClientMini.command(socket, "echo", %{"client" => "mini", "raw" => true})
+```
+
+Canceling an unknown task is a no-op on the Isabelle side, but it proves the
+`cancel` command's empty `OK` body is handled correctly.
+
+```elixir
+{:ok, nil} =
+  IsabelleClientMini.cancel_task(socket, "00000000-0000-0000-0000-000000000000")
+```
+
+## Build And Start A Session
+
+The next commands are asynchronous. Isabelle first returns `OK {"task": ...}`,
+then streams `NOTE` messages, and finally returns `FINISHED` or `FAILED`.
+
+```elixir
+{:ok, build_task} = IsabelleClientMini.build_session(socket, %{"session" => "HOL"})
+{:ok, build_task} = IsabelleClientMini.await_task(socket, build_task, 120_000)
+
+{build_task.status, build_task.result["ok"], length(build_task.notes)}
+```
+
+```elixir
+{:ok, start_task} = IsabelleClientMini.start_session(socket, %{"session" => "HOL"})
+{:ok, start_task} = IsabelleClientMini.poll_status(socket, start_task, 120_000)
+
+session_id = IsabelleClientMini.extract_session(start_task)
+{start_task.status, session_id, Enum.map(start_task.notes, & &1["message"])}
+```
+
+## Check A Theory
+
+Isabelle reads theories from disk, so the notebook creates a temporary directory.
+
+```elixir
+theory_dir =
+  Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_mini_#{System.unique_integer([:positive])}")
+File.mkdir_p!(theory_dir)
+theory_dir
+```
+
+We write a tiny `.thy` file to the temporary directory and ask the session to check it.
+
+```elixir
+File.write!(Path.join(theory_dir, "Example.thy"), """
+theory Example imports Main
+begin
+
+theorem "x = x"
+  sledgehammer by simp
+
+proposition "x = y"
+  nitpick oops
+
+end
+""")
+```
+
+```elixir
+{:ok, use_task} =
+  IsabelleClientMini.use_theories(socket, %{
+    "session_id" => session_id,
+    "theories" => ["Example"],
+    "master_dir" => theory_dir
+  })
+
+{:ok, use_task} = IsabelleClientMini.await_task(socket, use_task, 120_000)
+{use_task.status, use_task.result["ok"], use_task.result["errors"]}
+```
+
+`extract_results/1` gives the user-facing messages from the checked node.
+
+```elixir
+results = IsabelleClientMini.extract_results(use_task)
+```
+
+`purge_theories` is synchronous and returns the purged/retained node lists.
+
+```elixir
+{:ok, purge_result} =
+  IsabelleClientMini.purge_theories(socket, %{
+    "session_id" => session_id,
+    "theories" => ["Example"],
+    "master_dir" => theory_dir
+  })
+
+{purge_result["purged"], purge_result["retained"]}
+```
+
+## Stop And Shutdown
+
+Stop the Isabelle session cleanly, then shut down the resident server through
+the protocol.
+
+```elixir
+{:ok, stop_task} = IsabelleClientMini.stop_session(socket, session_id)
+{:ok, stop_task} = IsabelleClientMini.await_task(socket, stop_task, 120_000)
+
+{stop_task.status, stop_task.result}
+```
+
+```elixir
+{:ok, nil} = IsabelleClientMini.shutdown_server(socket)
+:ok = IsabelleClientMini.close(socket)
+```
+
+`kill_server/1` is harmless after protocol shutdown and useful when rerunning
+only part of the notebook.
+
+```elixir
+IsabelleClientMini.kill_server(server_name)
+```

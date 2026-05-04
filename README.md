@@ -1,31 +1,76 @@
-# Isabelle Elixir bindings and more
+# Isabelle Elixir
 
-[![Hex version](https://img.shields.io/hexpm/v/isabelle_elixir.svg)](https://hex.pm/packages/isabelle_elixir)
-[![HexDocs](https://img.shields.io/badge/hex-docs-brightgreen.svg)](https://hexdocs.pm/isabelle_elixir)
+Elixir clients for [Isabelle](https://isabelle.in.tum.de/)  server.
 
-> **Elixir bindings and utilities for the [Isabelle](https://isabelle.in.tum.de) proof assistant**
+The library speaks Isabelle's server protocol directly. See Chapter 4 in the [Isabelle system manual](https://isabelle.in.tum.de/doc/system.pdf) for the specification.
 
-`isabelle_elixir` lets you drive Isabelle’s *resident server* from Elixir code: start/stop the JVM server, launch logic sessions, compile & check theories, stream build progress, and retrieve generated artefacts – all with familiar Elixir APIs.
+## Clients
 
----
+`IsabelleClientMini` is the low-level building block. It is stateless, exposes
+the TCP socket, and gives you explicit `command/3`, `async_command/3`, and
+`await_task/3` helpers.
 
-## ✨ Features
+`IsabelleClient` is the default client for scripts and notebooks. It keeps the
+socket and current `session_id` in a struct, and awaits asynchronous Isabelle
+tasks for the common session workflow.
 
-* **Zero-pain server control** – start, list, kill Isabelle servers programmatically.  
-* **TCP client** – synchronous helpers for every core server command (`session_start`, `use_theories`, …).  
-* **Streaming status** – follow `NOTE`/`FINISHED`/`FAILED` messages and extract results.  
-* **Stateless by design** – works in scripts, Mix tasks, GenServers or LiveBooks.  
-* **Pure Elixir** – no NIFs.  
+`IsabelleClientFull` is a `GenServer` wrapper. It owns the socket, so callers
+may safely share it across processes. Calls are serialized by design.
 
----
+## Tutorial Livebooks
 
-## 📦 Installation
+The notebooks in `livebook_examples/` are intended to be read and run in this
+order:
 
-Add the dependency to your `mix.exs` and fetch it:
+1. `IsabelleClientMini.livemd` introduces the wire-level building blocks and
+   explicit task handling.
+2. `IsabelleClient.livemd` shows the default stateful client for ordinary use.
+3. `IsabelleClientFull.livemd` shows the process-owning client and why it is
+   the right choice when multiple Elixir processes share one Isabelle
+   connection.
+
+Together they serve as the tutorial for the library. They start local Isabelle
+servers, run smoke tests, build/start `HOL` session, check theories, purge, stop, and
+clean up. The "Full" notebook additionally demonstrates concurrency-safe access.
+
+## Example
+
+Make sure Isabelle is available on `PATH`:
+
+```sh
+export PATH=/path/to/Isabelle2025-2/bin:$PATH
+```
+
+Then:
 
 ```elixir
-defp deps do
-  [
-    {:isabelle_elixir, "~> 0.1"}
-  ]
+{:ok, [server]} = IsabelleClientMini.new_server("elixir", 0)
+
+{:ok, client} =
+  IsabelleClient.connect(server["password"],
+    host: server["host"],
+    port: server["port"]
+  )
+
+{:ok, client, _task} = IsabelleClient.start_session(client, %{"session" => "HOL"})
+
+File.write!("/tmp/Example.thy", """
+theory Example imports Main
+begin
+
+theorem "x = x"
+  sledgehammer by simp
+
 end
+""")
+
+{:ok, task} =
+  IsabelleClient.use_theories(client, %{
+    "theories" => ["Example"],
+    "master_dir" => "/tmp"
+  })
+
+IO.puts(IsabelleClientMini.extract_results(task))
+
+{:ok, _client, _task} = IsabelleClient.stop_session(client)
+```
