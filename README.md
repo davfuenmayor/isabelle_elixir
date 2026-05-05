@@ -1,6 +1,6 @@
 # Isabelle Elixir
 
-Elixir clients for [Isabelle](https://isabelle.in.tum.de/)  server.
+Elixir clients for the [Isabelle](https://isabelle.in.tum.de/) server.
 
 The library speaks Isabelle's server protocol directly. See Chapter 4 in the [Isabelle system manual](https://isabelle.in.tum.de/doc/system.pdf) for the specification.
 
@@ -30,8 +30,9 @@ order:
    connection.
 
 Together they serve as the tutorial for the library. They start local Isabelle
-servers, run smoke tests, build/start `HOL` session, check theories, purge, stop, and
-clean up. The "Full" notebook additionally demonstrates concurrency-safe access.
+servers, run smoke tests, build and start a `HOL` session, check theories,
+purge, stop, and clean up. The "Full" notebook additionally demonstrates
+concurrency-safe access.
 
 ## Example
 
@@ -60,6 +61,9 @@ begin
 
 theorem "x = x"
   sledgehammer by simp
+
+proposition "x = y"
+  nitpick oops
 
 end
 """)

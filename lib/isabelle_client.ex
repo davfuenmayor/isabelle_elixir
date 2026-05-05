@@ -13,6 +13,7 @@ defmodule IsabelleClient do
 
   @type t :: %__MODULE__{socket: port(), session_id: String.t() | nil}
 
+  @doc "Connects to an Isabelle server and returns a stateful client struct."
   def connect(password, opts \\ []) do
     host = Keyword.get(opts, :host, "127.0.0.1")
     port = Keyword.get(opts, :port, 9999)
@@ -23,22 +24,31 @@ defmodule IsabelleClient do
     end
   end
 
+  @doc "Closes the client's socket."
   def close(%__MODULE__{socket: socket}), do: IsabelleClientMini.close(socket)
 
+  @doc "Runs a synchronous Isabelle command."
   def command(%__MODULE__{socket: socket}, name, arg \\ nil) do
     IsabelleClientMini.command(socket, name, arg)
   end
 
+  @doc "Round-trips a JSON value through Isabelle's `echo` command."
   def echo(client, value), do: command(client, "echo", value)
+
+  @doc "Returns the server command names supported by Isabelle."
   def help(client), do: command(client, "help")
+
+  @doc "Asks the Isabelle server process to shut down."
   def shutdown_server(client), do: command(client, "shutdown")
 
+  @doc "Builds an Isabelle session image and waits for the task result."
   def build_session(%__MODULE__{socket: socket}, args, timeout \\ :infinity) do
     with {:ok, task} <- IsabelleClientMini.build_session(socket, args) do
       IsabelleClientMini.await_task(socket, task, timeout)
     end
   end
 
+  @doc "Starts an Isabelle session, stores its `session_id`, and returns the updated client."
   def start_session(%__MODULE__{socket: socket} = client, args, timeout \\ :infinity) do
     with {:ok, task} <- IsabelleClientMini.start_session(socket, args),
          {:ok, %Task{result: %{"session_id" => session_id}} = task} <-
@@ -47,6 +57,7 @@ defmodule IsabelleClient do
     end
   end
 
+  @doc "Stops the active Isabelle session and clears `session_id`."
   def stop_session(%__MODULE__{session_id: nil}), do: {:error, :no_session}
 
   def stop_session(
@@ -62,6 +73,7 @@ defmodule IsabelleClient do
     end
   end
 
+  @doc "Checks theories in the active session and waits for the task result."
   def use_theories(client, args \\ nil, timeout \\ :infinity)
 
   def use_theories(%__MODULE__{session_id: nil}, _args, _timeout),
@@ -79,6 +91,7 @@ defmodule IsabelleClient do
     end
   end
 
+  @doc "Purges theories from the active session."
   def purge_theories(%__MODULE__{session_id: nil}), do: {:error, :no_session}
   def purge_theories(%__MODULE__{session_id: nil}, _args), do: {:error, :no_session}
 

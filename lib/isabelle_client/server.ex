@@ -8,6 +8,7 @@ defmodule IsabelleClient.Server do
   @isabelle_exec "isabelle"
   @timeout 7_000
 
+  @doc "Starts a local resident Isabelle server."
   def start(name \\ @default_name, port \\ @default_port) do
     with {:ok, exe} <- executable() do
       port =
@@ -28,6 +29,7 @@ defmodule IsabelleClient.Server do
     end
   end
 
+  @doc "Lists local resident Isabelle servers."
   def list do
     with {:ok, exe} <- executable(),
          {data, 0} <- System.cmd(exe, ["server", "-l"], stderr_to_stdout: true) do
@@ -38,12 +40,14 @@ defmodule IsabelleClient.Server do
     end
   end
 
+  @doc "Force-kills a local resident Isabelle server by name."
   def kill(name) do
     with {:ok, exe} <- executable() do
       System.cmd(exe, ["server", "-n", name, "-x"], stderr_to_stdout: true)
     end
   end
 
+  @doc "Parses `isabelle server` output into server descriptor maps."
   def parse_info(data) when is_binary(data) do
     regex =
       ~r/server\s+["'](?<name>[^"']+)["']\s*=\s*(?<host>\d{1,3}(?:\.\d{1,3}){3}):(?<port>\d+)\s+\(password\s+["'](?<password>[^"']+)["']\)/

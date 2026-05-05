@@ -1,7 +1,5 @@
 # IsabelleClientMini
 
-## Section
-
 `IsabelleClientMini` is the bare-bones client. It exposes the TCP socket and
 keeps no state. That is useful when you want a tiny protocol building block or
 you want to own all lifecycle decisions yourself.

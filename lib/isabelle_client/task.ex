@@ -12,5 +12,6 @@ defmodule IsabelleClient.Task do
           notes: [map()]
         }
 
+  @doc "Creates a running task struct from an Isabelle task id."
   def new(id), do: %__MODULE__{id: id, status: :running}
 end

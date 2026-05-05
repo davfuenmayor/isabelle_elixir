@@ -1,7 +1,5 @@
 # IsabelleClientFull
 
-## Section
-
 `IsabelleClientFull` is the process-owning client. It wraps the stateful client
 in a `GenServer`, so many Elixir processes can share one Isabelle connection
 without racing on socket reads and writes.

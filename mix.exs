@@ -16,12 +16,31 @@ defmodule Isabelle.MixProject do
       homepage_url: "https://isabelle.in.tum.de",
       package: [
         licenses: ["MIT"],
+        files: [
+          "lib",
+          "livebook_examples",
+          "mix.exs",
+          "README.md",
+          "LICENSE"
+        ],
         links: %{
           "GitHub" => "https://github.com/davfuenmayor/isabelle_elixir",
           "Isabelle" => "https://isabelle.in.tum.de"
         }
       ],
-      docs: [main: "readme", extras: ["README.md"]]
+      docs: [
+        main: "readme",
+        extras: [
+          "README.md",
+          "livebook_examples/IsabelleClientMini.livemd",
+          "livebook_examples/IsabelleClient.livemd",
+          "livebook_examples/IsabelleClientFull.livemd"
+        ],
+        groups_for_extras: [
+          Tutorials: ~r/livebook_examples\/.*/
+        ],
+        source_ref: "v0.2.0"
+      ]
     ]
   end
 

@@ -10,33 +10,47 @@ defmodule IsabelleClientFull do
 
   use GenServer
 
+  @doc "Starts a GenServer-backed Isabelle client."
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
   end
 
+  @doc "Alias for `start_link/1`."
   def connect(opts), do: start_link(opts)
 
+  @doc "Stops the client process and closes its socket."
   def close(server), do: GenServer.stop(server, :normal)
 
+  @doc "Runs a synchronous Isabelle command through the client process."
   def command(server, name, arg \\ nil, timeout \\ :infinity),
     do: GenServer.call(server, {:command, name, arg}, timeout)
 
+  @doc "Round-trips a JSON value through Isabelle's `echo` command."
   def echo(server, value), do: command(server, "echo", value)
+
+  @doc "Returns the server command names supported by Isabelle."
   def help(server), do: command(server, "help")
+
+  @doc "Asks the Isabelle server process to shut down."
   def shutdown_server(server), do: command(server, "shutdown")
 
+  @doc "Builds an Isabelle session image and waits for the task result."
   def build_session(server, args, timeout \\ :infinity),
     do: GenServer.call(server, {:async, :build_session, args}, timeout)
 
+  @doc "Starts an Isabelle session and stores its `session_id` in the client process."
   def start_session(server, args, timeout \\ :infinity),
     do: GenServer.call(server, {:async, :start_session, args}, timeout)
 
+  @doc "Stops the active Isabelle session."
   def stop_session(server, timeout \\ :infinity),
     do: GenServer.call(server, :stop_session, timeout)
 
+  @doc "Checks theories in the active session and waits for the task result."
   def use_theories(server, args, timeout \\ :infinity),
     do: GenServer.call(server, {:async, :use_theories, args}, timeout)
 
+  @doc "Purges theories from the active session."
   def purge_theories(server, args, timeout \\ :infinity),
     do: GenServer.call(server, {:purge_theories, args}, timeout)
 

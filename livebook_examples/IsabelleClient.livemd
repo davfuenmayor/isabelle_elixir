@@ -1,7 +1,5 @@
 # IsabelleClient
 
-## Section
-
 `IsabelleClient` is the ordinary user-facing client. It keeps the socket and
 current `session_id` in a struct, which makes session workflows less noisy than
 the stateless Mini API.
