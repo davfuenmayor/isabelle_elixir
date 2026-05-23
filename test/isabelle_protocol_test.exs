@@ -3,6 +3,7 @@ defmodule IsabelleProtocolTest do
 
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
+  alias IsabelleClient.Result
   alias IsabelleClient.Server
   alias IsabelleClient.Task
 
@@ -109,12 +110,25 @@ defmodule IsabelleProtocolTest do
       status: :finished,
       result: %{
         "nodes" => [
-          %{"messages" => [%{"message" => "first"}, %{"message" => "second"}]}
+          %{"messages" => [%{"message" => "first"}, %{"message" => "second"}]},
+          %{"messages" => [%{"message" => ""}, %{"message" => "third"}]}
         ]
       }
     }
 
-    assert IsabelleClientMini.extract_results(task) == "first\nsecond"
+    assert Result.messages(task) == ["first", "second", "third"]
+    assert Result.extract_results(task) == "first\nsecond\nthird"
+    assert IsabelleClient.extract_results(task) == "first\nsecond\nthird"
+    assert IsabelleClientMini.extract_results(task) == "first\nsecond\nthird"
     assert IsabelleClientMini.extract_results(%{"nodes" => []}) == ""
+  end
+
+  test "extracts session ids from tasks and result maps" do
+    task = %Task{status: :finished, result: %{"session_id" => "session-123"}}
+
+    assert Result.extract_session(task) == "session-123"
+    assert IsabelleClient.extract_session(task) == "session-123"
+    assert IsabelleClientMini.extract_session(%{"session_id" => "session-123"}) == "session-123"
+    assert Result.extract_session(%{}) == nil
   end
 end

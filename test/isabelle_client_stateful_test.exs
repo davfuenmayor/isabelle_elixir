@@ -2,6 +2,7 @@ defmodule IsabelleClientStatefulTest do
   use ExUnit.Case, async: false
 
   alias IsabelleClient.Task
+  alias IsabelleClient.Protocol
 
   @tag timeout: 180_000
   test "stateful client tracks sessions and exercises convenience APIs" do
@@ -70,5 +71,46 @@ defmodule IsabelleClientStatefulTest do
       assert {:ok, nil} = IsabelleClient.shutdown_server(client)
       assert :ok = IsabelleClient.close(client)
     end)
+  end
+
+  test "use_theories treats nil args as an empty argument map for an active session" do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listen)
+    parent = self()
+
+    server =
+      spawn(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen)
+        {:ok, command} = recv_line(socket)
+        send(parent, {:command, command})
+
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
+
+        :ok =
+          :gen_tcp.send(socket, Protocol.command("FINISHED", %{"task" => "task-1", "ok" => true}))
+
+        :gen_tcp.close(socket)
+      end)
+
+    {:ok, socket} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+    client = %IsabelleClient{socket: socket, session_id: "session-1"}
+
+    assert {:ok, %Task{status: :finished, result: %{"ok" => true}}} =
+             IsabelleClient.use_theories(client, nil, 1_000)
+
+    assert_receive {:command, "use_theories {\"session_id\":\"session-1\"}"}
+
+    :gen_tcp.close(socket)
+    :gen_tcp.close(listen)
+    ref = Process.monitor(server)
+    assert_receive {:DOWN, ^ref, :process, ^server, _}
+  end
+
+  defp recv_line(socket, acc \\ []) do
+    case :gen_tcp.recv(socket, 1, 1_000) do
+      {:ok, "\n"} -> {:ok, IO.iodata_to_binary(acc)}
+      {:ok, byte} -> recv_line(socket, [acc, byte])
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

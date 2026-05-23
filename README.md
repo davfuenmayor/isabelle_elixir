@@ -74,7 +74,7 @@ end
     "master_dir" => "/tmp"
   })
 
-IO.puts(IsabelleClientMini.extract_results(task))
+IO.puts(IsabelleClient.extract_results(task))
 
 {:ok, _client, _task} = IsabelleClient.stop_session(client)
 ```

@@ -10,6 +10,9 @@ defmodule IsabelleClientFull do
 
   use GenServer
 
+  @default_timeout 30_000
+  @call_timeout_grace 1_000
+
   @doc "Starts a GenServer-backed Isabelle client."
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -22,8 +25,8 @@ defmodule IsabelleClientFull do
   def close(server), do: GenServer.stop(server, :normal)
 
   @doc "Runs a synchronous Isabelle command through the client process."
-  def command(server, name, arg \\ nil, timeout \\ :infinity),
-    do: GenServer.call(server, {:command, name, arg}, timeout)
+  def command(server, name, arg \\ nil, timeout \\ @default_timeout),
+    do: GenServer.call(server, {:command, name, arg, timeout}, call_timeout(timeout))
 
   @doc "Round-trips a JSON value through Isabelle's `echo` command."
   def echo(server, value), do: command(server, "echo", value)
@@ -36,23 +39,23 @@ defmodule IsabelleClientFull do
 
   @doc "Builds an Isabelle session image and waits for the task result."
   def build_session(server, args, timeout \\ :infinity),
-    do: GenServer.call(server, {:async, :build_session, args}, timeout)
+    do: GenServer.call(server, {:async, :build_session, args, timeout}, call_timeout(timeout))
 
   @doc "Starts an Isabelle session and stores its `session_id` in the client process."
   def start_session(server, args, timeout \\ :infinity),
-    do: GenServer.call(server, {:async, :start_session, args}, timeout)
+    do: GenServer.call(server, {:async, :start_session, args, timeout}, call_timeout(timeout))
 
   @doc "Stops the active Isabelle session."
   def stop_session(server, timeout \\ :infinity),
-    do: GenServer.call(server, :stop_session, timeout)
+    do: GenServer.call(server, {:stop_session, timeout}, call_timeout(timeout))
 
   @doc "Checks theories in the active session and waits for the task result."
   def use_theories(server, args, timeout \\ :infinity),
-    do: GenServer.call(server, {:async, :use_theories, args}, timeout)
+    do: GenServer.call(server, {:async, :use_theories, args, timeout}, call_timeout(timeout))
 
   @doc "Purges theories from the active session."
-  def purge_theories(server, args, timeout \\ :infinity),
-    do: GenServer.call(server, {:purge_theories, args}, timeout)
+  def purge_theories(server, args, timeout \\ @default_timeout),
+    do: GenServer.call(server, {:purge_theories, args, timeout}, call_timeout(timeout))
 
   @impl true
   def init(opts) do
@@ -71,34 +74,39 @@ defmodule IsabelleClientFull do
   def terminate(_reason, client), do: IsabelleClient.close(client)
 
   @impl true
-  def handle_call({:command, name, arg}, _from, client) do
-    {:reply, IsabelleClient.command(client, name, arg), client}
+  def handle_call({:command, name, arg, timeout}, _from, client) do
+    {:reply, IsabelleClient.command(client, name, arg, timeout), client}
   end
 
-  def handle_call({:async, :build_session, args}, _from, client) do
-    {:reply, IsabelleClient.build_session(client, args), client}
+  def handle_call({:async, :build_session, args, timeout}, _from, client) do
+    {:reply, IsabelleClient.build_session(client, args, timeout), client}
   end
 
-  def handle_call({:async, :start_session, args}, _from, client) do
-    case IsabelleClient.start_session(client, args) do
+  def handle_call({:async, :start_session, args, timeout}, _from, client) do
+    case IsabelleClient.start_session(client, args, timeout) do
       {:ok, client, task} -> {:reply, {:ok, task}, client}
       other -> {:reply, other, client}
     end
   end
 
-  def handle_call(:stop_session, _from, client) do
-    case IsabelleClient.stop_session(client) do
+  def handle_call({:stop_session, timeout}, _from, client) do
+    case IsabelleClient.stop_session(client, timeout) do
       {:ok, client, task} -> {:reply, {:ok, task}, client}
       {:error, client, task} -> {:reply, {:error, task}, client}
       other -> {:reply, other, client}
     end
   end
 
-  def handle_call({:async, :use_theories, args}, _from, client) do
-    {:reply, IsabelleClient.use_theories(client, args), client}
+  def handle_call({:async, :use_theories, args, timeout}, _from, client) do
+    {:reply, IsabelleClient.use_theories(client, args, timeout), client}
   end
 
-  def handle_call({:purge_theories, args}, _from, client) do
-    {:reply, IsabelleClient.purge_theories(client, args), client}
+  def handle_call({:purge_theories, args, timeout}, _from, client) do
+    {:reply, IsabelleClient.purge_theories(client, args, timeout), client}
   end
+
+  defp call_timeout(:infinity), do: :infinity
+
+  defp call_timeout(timeout) when is_integer(timeout) and timeout >= 0,
+    do: timeout + @call_timeout_grace
 end

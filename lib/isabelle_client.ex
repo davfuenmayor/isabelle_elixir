@@ -7,6 +7,7 @@ defmodule IsabelleClient do
   multiple concurrent processes. Use `IsabelleClientFull` for that.
   """
 
+  alias IsabelleClient.Result
   alias IsabelleClient.Task
 
   defstruct [:socket, :session_id]
@@ -28,8 +29,8 @@ defmodule IsabelleClient do
   def close(%__MODULE__{socket: socket}), do: IsabelleClientMini.close(socket)
 
   @doc "Runs a synchronous Isabelle command."
-  def command(%__MODULE__{socket: socket}, name, arg \\ nil) do
-    IsabelleClientMini.command(socket, name, arg)
+  def command(%__MODULE__{socket: socket}, name, arg \\ nil, timeout \\ 30_000) do
+    IsabelleClientMini.command(socket, name, arg, timeout)
   end
 
   @doc "Round-trips a JSON value through Isabelle's `echo` command."
@@ -58,11 +59,13 @@ defmodule IsabelleClient do
   end
 
   @doc "Stops the active Isabelle session and clears `session_id`."
-  def stop_session(%__MODULE__{session_id: nil}), do: {:error, :no_session}
+  def stop_session(client, timeout \\ :infinity)
+
+  def stop_session(%__MODULE__{session_id: nil}, _timeout), do: {:error, :no_session}
 
   def stop_session(
         %__MODULE__{socket: socket, session_id: session_id} = client,
-        timeout \\ :infinity
+        timeout
       ) do
     with {:ok, task} <- IsabelleClientMini.stop_session(socket, session_id),
          result <- IsabelleClientMini.await_task(socket, task, timeout) do
@@ -84,6 +87,7 @@ defmodule IsabelleClient do
         args,
         timeout
       ) do
+    args = args || %{}
     args = Map.put_new(args, "session_id", session_id)
 
     with {:ok, task} <- IsabelleClientMini.use_theories(socket, args) do
@@ -92,11 +96,19 @@ defmodule IsabelleClient do
   end
 
   @doc "Purges theories from the active session."
-  def purge_theories(%__MODULE__{session_id: nil}), do: {:error, :no_session}
-  def purge_theories(%__MODULE__{session_id: nil}, _args), do: {:error, :no_session}
+  def purge_theories(client, args \\ nil, timeout \\ 30_000)
 
-  def purge_theories(%__MODULE__{socket: socket, session_id: session_id}, args) do
+  def purge_theories(%__MODULE__{session_id: nil}, _args, _timeout), do: {:error, :no_session}
+
+  def purge_theories(%__MODULE__{socket: socket, session_id: session_id}, args, timeout) do
+    args = args || %{}
     args = Map.put_new(args, "session_id", session_id)
-    IsabelleClientMini.purge_theories(socket, args)
+    IsabelleClientMini.purge_theories(socket, args, timeout)
   end
+
+  @doc "Extracts the `session_id` from a finished session-start task or result map."
+  defdelegate extract_session(result), to: Result
+
+  @doc "Extracts user-facing theory messages from a finished `use_theories` task or result map."
+  defdelegate extract_results(result), to: Result
 end

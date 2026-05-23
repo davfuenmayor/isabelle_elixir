@@ -10,6 +10,7 @@ defmodule IsabelleClientMini do
 
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
+  alias IsabelleClient.Result
   alias IsabelleClient.Server
   alias IsabelleClient.Task
 
@@ -109,7 +110,8 @@ defmodule IsabelleClientMini do
   def use_theories(socket, args), do: async_command(socket, "use_theories", args)
 
   @doc "Runs Isabelle `purge_theories` for an active session."
-  def purge_theories(socket, args), do: command(socket, "purge_theories", args)
+  def purge_theories(socket, args, timeout \\ @timeout),
+    do: command(socket, "purge_theories", args, timeout)
 
   @doc "Alias for `await_task/3`, kept for the original Mini workflow."
   def poll_status(socket, task_or_id, timeout \\ :infinity)
@@ -121,23 +123,10 @@ defmodule IsabelleClientMini do
     do: await_task(socket, task_id, timeout)
 
   @doc "Extracts the `session_id` from a finished session-start result."
-  def extract_session(%Task{status: :finished, result: %{"session_id" => session_id}}),
-    do: session_id
-
-  def extract_session(%{"session_id" => session_id}), do: session_id
+  defdelegate extract_session(result), to: Result
 
   @doc "Extracts user-facing theory messages from a finished `use_theories` result."
-  def extract_results(%Task{status: :finished, result: result}), do: extract_results(result)
-
-  def extract_results(%{"nodes" => [node | _]}) do
-    node
-    |> Map.get("messages", [])
-    |> Enum.map(&Map.get(&1, "message", ""))
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n")
-  end
-
-  def extract_results(_), do: ""
+  defdelegate extract_results(result), to: Result
 
   defp do_await_task(socket, %Task{id: id, notes: notes} = task, deadline) do
     with {:ok, response} <- Protocol.recv(socket, remaining(deadline)) do

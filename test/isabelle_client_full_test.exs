@@ -1,7 +1,37 @@
 defmodule IsabelleClientFullTest do
   use ExUnit.Case, async: false
 
+  alias IsabelleClient.Protocol
   alias IsabelleClient.Task, as: IsabelleTask
+
+  test "command timeout is applied to the socket receive, not only GenServer.call" do
+    {:ok, pid, server} =
+      start_fake_authenticated_server(fn socket, parent ->
+        {:ok, command} = recv_line(socket)
+        send(parent, {:command, command})
+      end)
+
+    assert {:error, :timeout} = IsabelleClientFull.command(pid, "help", nil, 50)
+    assert_receive {:command, "help"}
+
+    :ok = IsabelleClientFull.close(pid)
+    assert_server_down(server)
+  end
+
+  test "async command timeout is applied while awaiting Isabelle task completion" do
+    {:ok, pid, server} =
+      start_fake_authenticated_server(fn socket, parent ->
+        {:ok, command} = recv_line(socket)
+        send(parent, {:command, command})
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
+      end)
+
+    assert {:error, :timeout} = IsabelleClientFull.build_session(pid, %{"session" => "HOL"}, 50)
+    assert_receive {:command, "session_build {\"session\":\"HOL\"}"}
+
+    :ok = IsabelleClientFull.close(pid)
+    assert_server_down(server)
+  end
 
   @tag timeout: 180_000
   test "GenServer client serializes concurrent callers and exercises full API" do
@@ -186,5 +216,38 @@ defmodule IsabelleClientFullTest do
           flunk("timed out waiting for concurrent result")
       end
     end
+  end
+
+  defp start_fake_authenticated_server(after_auth) do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listen)
+    parent = self()
+
+    server =
+      spawn(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen)
+        {:ok, "secret"} = recv_line(socket)
+        :ok = :gen_tcp.send(socket, "OK\n")
+        after_auth.(socket, parent)
+        Process.sleep(:infinity)
+      end)
+
+    {:ok, pid} = IsabelleClientFull.connect(password: "secret", host: "127.0.0.1", port: port)
+    :gen_tcp.close(listen)
+    {:ok, pid, server}
+  end
+
+  defp recv_line(socket, acc \\ []) do
+    case :gen_tcp.recv(socket, 1, 1_000) do
+      {:ok, "\n"} -> {:ok, IO.iodata_to_binary(acc)}
+      {:ok, byte} -> recv_line(socket, [acc, byte])
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp assert_server_down(server) do
+    ref = Process.monitor(server)
+    Process.exit(server, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^server, _}
   end
 end
