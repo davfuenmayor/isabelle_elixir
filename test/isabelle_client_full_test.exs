@@ -33,6 +33,83 @@ defmodule IsabelleClientFullTest do
     assert_server_down(server)
   end
 
+  test "concurrent async tasks are routed by task id with note callbacks" do
+    parent = self()
+
+    {:ok, pid, server} =
+      start_fake_authenticated_server(fn socket, parent ->
+        {:ok, first} = recv_line(socket)
+        send(parent, {:command, 1, first})
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
+
+        {:ok, second} = recv_line(socket)
+        send(parent, {:command, 2, second})
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-2"}))
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            Protocol.command("NOTE", %{"task" => "task-2", "message" => "second note"})
+          )
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            Protocol.command("FINISHED", %{"task" => "task-2", "ok" => true, "name" => "second"})
+          )
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            Protocol.command("NOTE", %{"task" => "task-1", "message" => "first note"})
+          )
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            Protocol.command("FINISHED", %{"task" => "task-1", "ok" => true, "name" => "first"})
+          )
+      end)
+
+    on_note = fn note -> send(parent, {:note, note["task"], note["message"]}) end
+
+    first =
+      Elixir.Task.async(fn ->
+        IsabelleClientFull.build_session(pid, [session: "First"], 1_000, on_note: on_note)
+      end)
+
+    assert_receive {:command, 1, "session_build {\"session\":\"First\"}"}
+
+    second =
+      Elixir.Task.async(fn ->
+        IsabelleClientFull.build_session(pid, [session: "Second"], 1_000, on_note: on_note)
+      end)
+
+    assert_receive {:command, 2, "session_build {\"session\":\"Second\"}"}
+
+    assert {:ok,
+            %IsabelleTask{
+              id: "task-1",
+              result: %{"name" => "first"},
+              notes: [%{"message" => "first note"}]
+            }} =
+             Elixir.Task.await(first)
+
+    assert {:ok,
+            %IsabelleTask{
+              id: "task-2",
+              result: %{"name" => "second"},
+              notes: [%{"message" => "second note"}]
+            }} =
+             Elixir.Task.await(second)
+
+    assert_receive {:note, "task-1", "first note"}
+    assert_receive {:note, "task-2", "second note"}
+
+    :ok = IsabelleClientFull.close(pid)
+    assert_server_down(server)
+  end
+
   @tag timeout: 180_000
   test "GenServer client can start and clean up a local session" do
     name = "elixir_test_full_local_#{System.unique_integer([:positive])}"
@@ -49,7 +126,7 @@ defmodule IsabelleClientFullTest do
   end
 
   @tag timeout: 180_000
-  test "GenServer client serializes concurrent callers and exercises full API" do
+  test "GenServer client routes concurrent callers and exercises full API" do
     IsabelleTestSupport.with_server("full", fn server ->
       assert {:ok, pid} =
                IsabelleClientFull.connect(

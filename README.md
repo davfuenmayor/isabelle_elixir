@@ -15,7 +15,8 @@ socket and current `session_id` in a struct, and awaits asynchronous Isabelle
 tasks for the common session workflow.
 
 `IsabelleClientFull` is a `GenServer` wrapper. It owns the socket, so callers
-may safely share it across processes. Calls are serialized by design.
+may safely share it across processes while concurrent Isabelle tasks are routed
+back to the right caller by task id.
 
 ## Tutorial Livebooks
 
