@@ -111,17 +111,32 @@ defmodule IsabelleProtocolTest do
       status: :finished,
       result: %{
         "nodes" => [
-          %{"messages" => [%{"message" => "first"}, %{"message" => "second"}]},
-          %{"messages" => [%{"message" => ""}, %{"message" => "third"}]}
+          %{
+            "messages" => [
+              %{"message" => "first", "kind" => "writeln", "pos" => %{"line" => 1}},
+              %{"message" => "second", "kind" => "warning", "pos" => %{"line" => 2}}
+            ]
+          },
+          %{
+            "messages" => [
+              %{"message" => "", "kind" => "writeln", "pos" => %{"line" => 2}},
+              %{"message" => "third", "kind" => "error", "pos" => %{"line" => 3}},
+              %{"message" => "unpositioned", "kind" => "writeln"}
+            ]
+          }
         ]
       }
     }
 
-    assert Result.messages(task) == ["first", "second", "third"]
-    assert Result.extract_results(task) == "first\nsecond\nthird"
-    assert IsabelleClient.extract_results(task) == "first\nsecond\nthird"
-    assert IsabelleClientMini.extract_results(task) == "first\nsecond\nthird"
-    assert IsabelleClientMini.extract_results(%{"nodes" => []}) == ""
+    assert Result.messages(task) == ["first", "second", "third", "unpositioned"]
+    assert IsabelleClient.messages(task) == ["first", "second", "third", "unpositioned"]
+    assert IsabelleClient.messages(task, line: 2) == ["second"]
+    assert IsabelleClient.messages(task, line: 2..3) == ["second", "third"]
+    assert IsabelleClient.messages(task, line: [1, 3]) == ["first", "third"]
+    assert IsabelleClient.warnings(task, line: 2) == ["second"]
+    assert IsabelleClient.errors(task, line: 3) == ["third"]
+    assert [%{"message" => "third"}] = IsabelleClient.diagnostics(task, line: 3)
+    assert IsabelleClient.messages(%{"nodes" => []}) == []
   end
 
   test "extracts session ids from tasks and result maps" do

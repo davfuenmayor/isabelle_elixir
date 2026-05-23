@@ -207,17 +207,21 @@ defmodule IsabelleClient do
   @doc "Extracts the `session_id` from a finished session-start task or result map."
   defdelegate extract_session(result), to: Result
 
+  @doc "Returns raw diagnostic message maps from a `use_theories` task or result map."
+  defdelegate diagnostics(result), to: Result
+  defdelegate diagnostics(result, opts), to: Result
+
   @doc "Returns user-facing messages from a `use_theories` task or result map."
   defdelegate messages(result), to: Result
+  defdelegate messages(result, opts), to: Result
 
   @doc "Returns error messages from a `use_theories` task or result map."
   defdelegate errors(result), to: Result
+  defdelegate errors(result, opts), to: Result
 
   @doc "Returns warning messages from a `use_theories` task or result map."
   defdelegate warnings(result), to: Result
-
-  @doc "Extracts user-facing theory messages from a finished `use_theories` task or result map."
-  defdelegate extract_results(result), to: Result
+  defdelegate warnings(result, opts), to: Result
 
   defp session_args(opts) do
     opts

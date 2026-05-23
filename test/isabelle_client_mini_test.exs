@@ -60,7 +60,7 @@ defmodule IsabelleClientMiniTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      assert IsabelleClientMini.extract_results(use_task) =~ "theorem ?x = ?x"
+      assert Enum.join(IsabelleClient.messages(use_task), "\n") =~ "theorem ?x = ?x"
 
       assert {:ok, %{"purged" => purged, "retained" => retained}} =
                IsabelleClientMini.purge_theories(socket, %{

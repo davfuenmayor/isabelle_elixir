@@ -126,9 +126,6 @@ defmodule IsabelleClientMini do
   @doc "Extracts the `session_id` from a finished session-start result."
   defdelegate extract_session(result), to: Result
 
-  @doc "Extracts user-facing theory messages from a finished `use_theories` result."
-  defdelegate extract_results(result), to: Result
-
   defp do_await_task(socket, %Task{id: id, notes: notes} = task, deadline) do
     with {:ok, response} <- Protocol.recv(socket, remaining(deadline)) do
       response_task = task_id(response.body)

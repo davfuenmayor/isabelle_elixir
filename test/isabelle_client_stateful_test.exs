@@ -44,7 +44,16 @@ defmodule IsabelleClientStatefulTest do
       assert is_binary(client.tmp_dir)
       assert start_task.result["session_id"] == client.session_id
 
-      theory_dir = IsabelleTestSupport.theory_dir("stateful")
+      theory_dir =
+        IsabelleTestSupport.theory_dir("stateful", """
+        lemma "x = x"
+          sledgehammer
+          by simp
+
+        lemma "xs @ [] = xs"
+          sledgehammer
+          by simp
+        """)
 
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = use_task} =
                IsabelleClient.use_theories(
@@ -53,7 +62,15 @@ defmodule IsabelleClientStatefulTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      assert IsabelleClient.extract_results(use_task) =~ "theorem ?x = ?x"
+      use_line_5 = Enum.join(IsabelleClient.messages(use_task, line: 5), "\n")
+      use_line_6 = Enum.join(IsabelleClient.messages(use_task, line: 6), "\n")
+      use_line_9 = Enum.join(IsabelleClient.messages(use_task, line: 9), "\n")
+      use_line_10 = Enum.join(IsabelleClient.messages(use_task, line: 10), "\n")
+
+      assert use_line_5 =~ "Sledgehammering"
+      assert use_line_6 =~ "theorem ?x = ?x"
+      assert use_line_9 =~ "Sledgehammering"
+      assert use_line_10 =~ "theorem ?xs @ [] = ?xs"
 
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = check_file_task} =
                IsabelleClient.check_file(
@@ -63,18 +80,34 @@ defmodule IsabelleClientStatefulTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      assert IsabelleClient.messages(check_file_task) != []
+      file_line_5 = Enum.join(IsabelleClient.messages(check_file_task, line: 5), "\n")
+      file_line_6 = Enum.join(IsabelleClient.messages(check_file_task, line: 6), "\n")
+      file_line_9 = Enum.join(IsabelleClient.messages(check_file_task, line: 9), "\n")
+      file_line_10 = Enum.join(IsabelleClient.messages(check_file_task, line: 10), "\n")
+
+      assert file_line_5 =~ "Sledgehammering"
+      assert file_line_6 =~ "theorem ?x = ?x"
+      assert file_line_9 =~ "Sledgehammering"
+      assert file_line_10 =~ "theorem ?xs @ [] = ?xs"
 
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = check_text_task} =
                IsabelleClient.check_text(
                  client,
                  "Scratch",
-                 ~s(lemma "xs @ [] = xs"\n  by simp),
+                 ~s(lemma "x = x"\n  sledgehammer\n  by simp\n\nlemma "xs @ [] = xs"\n  sledgehammer\n  by simp),
                  [],
                  IsabelleTestSupport.session_timeout()
                )
 
-      assert IsabelleClient.extract_results(check_text_task) =~ "theorem ?xs @ [] = ?xs"
+      text_line_5 = Enum.join(IsabelleClient.messages(check_text_task, line: 5), "\n")
+      text_line_6 = Enum.join(IsabelleClient.messages(check_text_task, line: 6), "\n")
+      text_line_9 = Enum.join(IsabelleClient.messages(check_text_task, line: 9), "\n")
+      text_line_10 = Enum.join(IsabelleClient.messages(check_text_task, line: 10), "\n")
+
+      assert text_line_5 =~ "Sledgehammering"
+      assert text_line_6 =~ "theorem ?x = ?x"
+      assert text_line_9 =~ "Sledgehammering"
+      assert text_line_10 =~ "theorem ?xs @ [] = ?xs"
 
       assert {:ok, %{"purged" => purged, "retained" => retained}} =
                IsabelleClient.purge_theories(client,

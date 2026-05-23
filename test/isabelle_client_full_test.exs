@@ -263,7 +263,7 @@ defmodule IsabelleClientFullTest do
 
                   assert [%{"theory_name" => theory_name}] = use_task.result["nodes"]
                   assert theory_name == "Draft.#{theory}"
-                  assert IsabelleClientMini.extract_results(use_task) =~ expected_result
+                  assert Enum.join(IsabelleClient.messages(use_task), "\n") =~ expected_result
                   {:use_theories, theory, expected_result, use_task}
               end
 
