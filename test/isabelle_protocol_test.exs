@@ -3,6 +3,7 @@ defmodule IsabelleProtocolTest do
 
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
+  alias IsabelleClient.Arguments
   alias IsabelleClient.Result
   alias IsabelleClient.Server
   alias IsabelleClient.Task
@@ -130,5 +131,19 @@ defmodule IsabelleProtocolTest do
     assert IsabelleClient.extract_session(task) == "session-123"
     assert IsabelleClientMini.extract_session(%{"session_id" => "session-123"}) == "session-123"
     assert Result.extract_session(%{}) == nil
+  end
+
+  test "normalizes keyword and atom-keyed Isabelle arguments" do
+    assert Arguments.normalize(
+             session: "HOL",
+             dirs: ["src"],
+             options: [threads: 4],
+             nested: [%{print_mode: ["ASCII"]}]
+           ) == %{
+             "session" => "HOL",
+             "dirs" => ["src"],
+             "options" => %{"threads" => 4},
+             "nested" => [%{"print_mode" => ["ASCII"]}]
+           }
   end
 end

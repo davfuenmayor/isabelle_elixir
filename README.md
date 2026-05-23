@@ -45,36 +45,21 @@ export PATH=/path/to/Isabelle2025-2/bin:$PATH
 Then:
 
 ```elixir
-{:ok, [server]} = IsabelleClientMini.new_server("elixir", 0)
-
-{:ok, client} =
-  IsabelleClient.connect(server["password"],
-    host: server["host"],
-    port: server["port"]
-  )
-
-{:ok, client, _task} = IsabelleClient.start_session(client, %{"session" => "HOL"})
-
-File.write!("/tmp/Example.thy", """
-theory Example imports Main
-begin
-
-theorem "x = x"
-  sledgehammer by simp
-
-proposition "x = y"
-  nitpick oops
-
-end
-""")
-
 {:ok, task} =
-  IsabelleClient.use_theories(client, %{
-    "theories" => ["Example"],
-    "master_dir" => "/tmp"
-  })
+  IsabelleClient.with_session([session: "HOL"], fn client ->
+    IsabelleClient.check_text(client, "Example", """
+    theorem "x = x"
+      by simp
+    """)
+  end)
 
 IO.puts(IsabelleClient.extract_results(task))
+```
 
-{:ok, _client, _task} = IsabelleClient.stop_session(client)
+The lower-level functions still accept Isabelle-style maps, but ordinary
+Elixir keyword options work too:
+
+```elixir
+IsabelleClient.start_session(client, session: "HOL")
+IsabelleClient.use_theories(client, theories: ["Example"], master_dir: "/tmp")
 ```

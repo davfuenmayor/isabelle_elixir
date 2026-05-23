@@ -34,6 +34,21 @@ defmodule IsabelleClientFullTest do
   end
 
   @tag timeout: 180_000
+  test "GenServer client can start and clean up a local session" do
+    name = "elixir_test_full_local_#{System.unique_integer([:positive])}"
+
+    assert {:ok, pid} =
+             IsabelleClientFull.start_link(
+               server_name: name,
+               session: "HOL",
+               timeout: IsabelleTestSupport.session_timeout()
+             )
+
+    assert {:ok, "ok"} = IsabelleClientFull.echo(pid, "ok")
+    assert :ok = IsabelleClientFull.close(pid)
+  end
+
+  @tag timeout: 180_000
   test "GenServer client serializes concurrent callers and exercises full API" do
     IsabelleTestSupport.with_server("full", fn server ->
       assert {:ok, pid} =

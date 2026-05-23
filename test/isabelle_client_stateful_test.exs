@@ -13,7 +13,7 @@ defmodule IsabelleClientStatefulTest do
                  port: server["port"]
                )
 
-      assert %IsabelleClient{session_id: nil} = client
+      assert %IsabelleClient{session_id: nil, tmp_dir: nil} = client
       assert {:error, :no_session} = IsabelleClient.use_theories(client)
       assert {:error, :no_session} = IsabelleClient.purge_theories(client)
       assert {:error, :no_session} = IsabelleClient.stop_session(client)
@@ -22,25 +22,26 @@ defmodule IsabelleClientStatefulTest do
       IsabelleTestSupport.assert_commands(commands)
 
       assert {:ok, %{"client" => "stateful"}} =
-               IsabelleClient.command(client, "echo", %{"client" => "stateful"})
+               IsabelleClient.command(client, "echo", client: "stateful")
 
       assert {:ok, "stateful string"} = IsabelleClient.echo(client, "stateful string")
 
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}}} =
                IsabelleClient.build_session(
                  client,
-                 %{"session" => "HOL"},
+                 [session: "HOL"],
                  IsabelleTestSupport.session_timeout()
                )
 
       assert {:ok, client, %Task{status: :finished} = start_task} =
                IsabelleClient.start_session(
                  client,
-                 %{"session" => "HOL"},
+                 [session: "HOL"],
                  IsabelleTestSupport.session_timeout()
                )
 
       assert is_binary(client.session_id)
+      assert is_binary(client.tmp_dir)
       assert start_task.result["session_id"] == client.session_id
 
       theory_dir = IsabelleTestSupport.theory_dir("stateful")
@@ -48,17 +49,38 @@ defmodule IsabelleClientStatefulTest do
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = use_task} =
                IsabelleClient.use_theories(
                  client,
-                 %{"theories" => ["Example"], "master_dir" => theory_dir},
+                 [theories: ["Example"], master_dir: theory_dir],
                  IsabelleTestSupport.session_timeout()
                )
 
-      assert IsabelleClientMini.extract_results(use_task) =~ "theorem ?x = ?x"
+      assert IsabelleClient.extract_results(use_task) =~ "theorem ?x = ?x"
+
+      assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = check_file_task} =
+               IsabelleClient.check_file(
+                 client,
+                 Path.join(theory_dir, "Example.thy"),
+                 [],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert IsabelleClient.messages(check_file_task) != []
+
+      assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = check_text_task} =
+               IsabelleClient.check_text(
+                 client,
+                 "Scratch",
+                 ~s(lemma "xs @ [] = xs"\n  by simp),
+                 [],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert IsabelleClient.extract_results(check_text_task) =~ "theorem ?xs @ [] = ?xs"
 
       assert {:ok, %{"purged" => purged, "retained" => retained}} =
-               IsabelleClient.purge_theories(client, %{
-                 "theories" => ["Example"],
-                 "master_dir" => theory_dir
-               })
+               IsabelleClient.purge_theories(client,
+                 theories: ["Example"],
+                 master_dir: theory_dir
+               )
 
       assert is_list(purged)
       assert is_list(retained)
@@ -67,10 +89,29 @@ defmodule IsabelleClientStatefulTest do
                IsabelleClient.stop_session(client, IsabelleTestSupport.session_timeout())
 
       assert client.session_id == nil
+      assert client.tmp_dir == nil
 
       assert {:ok, nil} = IsabelleClient.shutdown_server(client)
       assert :ok = IsabelleClient.close(client)
     end)
+  end
+
+  @tag timeout: 180_000
+  test "with_session starts and cleans up a local session" do
+    name = "elixir_test_with_session_#{System.unique_integer([:positive])}"
+
+    assert {:ok, "ok"} =
+             IsabelleClient.with_session(
+               [
+                 server_name: name,
+                 session: "HOL",
+                 timeout: IsabelleTestSupport.session_timeout()
+               ],
+               fn client ->
+                 assert is_binary(client.session_id)
+                 IsabelleClient.echo(client, "ok")
+               end
+             )
   end
 
   test "use_theories treats nil args as an empty argument map for an active session" do

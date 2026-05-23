@@ -8,6 +8,7 @@ defmodule IsabelleClientMini do
   that many bytes.
   """
 
+  alias IsabelleClient.Arguments
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
   alias IsabelleClient.Result
@@ -53,7 +54,7 @@ defmodule IsabelleClientMini do
 
   @doc "Runs a synchronous Isabelle server command and returns its `OK` body."
   def command(socket, name, arg \\ nil, timeout \\ @timeout) do
-    with :ok <- Protocol.send(socket, Protocol.command(name, arg)),
+    with :ok <- Protocol.send(socket, Protocol.command(name, normalize_command_arg(arg))),
          {:ok, response} <- Protocol.recv(socket, timeout) do
       Protocol.ok_body(response)
     end
@@ -61,7 +62,7 @@ defmodule IsabelleClientMini do
 
   @doc "Starts an asynchronous Isabelle command and returns an `%IsabelleClient.Task{}`."
   def async_command(socket, name, arg, timeout \\ @timeout) do
-    with :ok <- Protocol.send(socket, Protocol.command(name, arg)),
+    with :ok <- Protocol.send(socket, Protocol.command(name, normalize_command_arg(arg))),
          {:ok, response} <- Protocol.recv(socket, timeout),
          {:ok, task_id} <- Protocol.task_id(response) do
       {:ok, Task.new(task_id)}
@@ -150,6 +151,9 @@ defmodule IsabelleClientMini do
 
   defp task_id(%{"task" => id}), do: id
   defp task_id(_), do: nil
+
+  defp normalize_command_arg(nil), do: nil
+  defp normalize_command_arg(arg), do: Arguments.normalize(arg)
 
   defp deadline(:infinity), do: :infinity
   defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
