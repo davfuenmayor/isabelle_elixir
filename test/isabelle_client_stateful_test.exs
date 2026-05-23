@@ -109,6 +109,16 @@ defmodule IsabelleClientStatefulTest do
       assert text_line_9 =~ "Sledgehammering"
       assert text_line_10 =~ "theorem ?xs @ [] = ?xs"
 
+      [%{"pos" => %{"offset" => proof_offset}} | _] =
+        IsabelleClient.diagnostics(check_text_task, line: 6)
+
+      proof_at_offset =
+        check_text_task
+        |> IsabelleClient.messages(line: 6, offset: proof_offset)
+        |> Enum.join("\n")
+
+      assert proof_at_offset =~ "theorem ?x = ?x"
+
       assert {:ok, %{"purged" => purged, "retained" => retained}} =
                IsabelleClient.purge_theories(client,
                  theories: ["Example"],

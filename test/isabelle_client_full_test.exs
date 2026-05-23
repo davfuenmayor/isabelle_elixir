@@ -71,29 +71,23 @@ defmodule IsabelleClientFullTest do
           )
       end)
 
-    on_note = fn note -> send(parent, {:note, note["task"], note["message"]}) end
-
     first =
       Elixir.Task.async(fn ->
-        IsabelleClientFull.build_session(pid, [session: "First"], 1_000, on_note: on_note)
+        IsabelleClientFull.build_session(pid, [session: "First"], 1_000,
+          on_note: fn note -> send(parent, {:note, :first, note["task"], note["message"]}) end
+        )
       end)
 
     assert_receive {:command, 1, "session_build {\"session\":\"First\"}"}
 
     second =
       Elixir.Task.async(fn ->
-        IsabelleClientFull.build_session(pid, [session: "Second"], 1_000, on_note: on_note)
+        IsabelleClientFull.build_session(pid, [session: "Second"], 1_000,
+          on_note: fn note -> send(parent, {:note, :second, note["task"], note["message"]}) end
+        )
       end)
 
     assert_receive {:command, 2, "session_build {\"session\":\"Second\"}"}
-
-    assert {:ok,
-            %IsabelleTask{
-              id: "task-1",
-              result: %{"name" => "first"},
-              notes: [%{"message" => "first note"}]
-            }} =
-             Elixir.Task.await(first)
 
     assert {:ok,
             %IsabelleTask{
@@ -103,8 +97,16 @@ defmodule IsabelleClientFullTest do
             }} =
              Elixir.Task.await(second)
 
-    assert_receive {:note, "task-1", "first note"}
-    assert_receive {:note, "task-2", "second note"}
+    assert {:ok,
+            %IsabelleTask{
+              id: "task-1",
+              result: %{"name" => "first"},
+              notes: [%{"message" => "first note"}]
+            }} =
+             Elixir.Task.await(first)
+
+    assert_receive {:note, :first, "task-1", "first note"}
+    assert_receive {:note, :second, "task-2", "second note"}
 
     :ok = IsabelleClientFull.close(pid)
     assert_server_down(server)
@@ -233,6 +235,7 @@ defmodule IsabelleClientFullTest do
         """)
       end
 
+      note_ref = make_ref()
       theory_ref = make_ref()
       theory_release_ref = make_ref()
 
@@ -253,12 +256,20 @@ defmodule IsabelleClientFullTest do
             result =
               case operation do
                 {:use_theories, theory, expected_result} ->
+                  on_note = fn note ->
+                    send(
+                      parent,
+                      {:full_theory_note, note_ref, theory, note["task"], note["message"]}
+                    )
+                  end
+
                   assert {:ok,
                           %IsabelleTask{status: :finished, result: %{"ok" => true}} = use_task} =
                            IsabelleClientFull.use_theories(
                              pid,
-                             %{"theories" => [theory], "master_dir" => theory_dir},
-                             IsabelleTestSupport.session_timeout()
+                             [theories: [theory], master_dir: theory_dir],
+                             IsabelleTestSupport.session_timeout(),
+                             on_note: on_note
                            )
 
                   assert [%{"theory_name" => theory_name}] = use_task.result["nodes"]
@@ -275,9 +286,25 @@ defmodule IsabelleClientFullTest do
       theory_results = collect_results(theory_ref, length(theory_tasks), 120_000)
       Enum.each(theory_tasks, &Elixir.Task.await(&1, 1_000))
 
-      assert theory_results
-             |> Enum.map(fn {:use_theories, theory, _expected, %IsabelleTask{}} -> theory end)
-             |> Enum.sort() == ~w(Example1 Example2 Example3)
+      results_by_theory =
+        Map.new(theory_results, fn {:use_theories, theory, _expected, task} -> {theory, task} end)
+
+      assert results_by_theory |> Map.keys() |> Enum.sort() == ~w(Example1 Example2 Example3)
+
+      notes_by_theory =
+        note_ref
+        |> drain_notes()
+        |> Enum.group_by(fn {theory, _task_id, _message} -> theory end)
+
+      assert notes_by_theory |> Map.keys() |> Enum.sort() == ~w(Example1 Example2 Example3)
+
+      for {theory, task} <- results_by_theory do
+        assert task.notes != []
+
+        assert Enum.all?(notes_by_theory[theory], fn {_theory, task_id, _message} ->
+                 task_id == task.id
+               end)
+      end
 
       assert {:ok, %{"purged" => purged, "retained" => retained}} =
                IsabelleClientFull.purge_theories(pid, %{
@@ -307,6 +334,15 @@ defmodule IsabelleClientFullTest do
         max(deadline - System.monotonic_time(:millisecond), 0) ->
           flunk("timed out waiting for concurrent result")
       end
+    end
+  end
+
+  defp drain_notes(ref, acc \\ []) do
+    receive do
+      {:full_theory_note, ^ref, theory, task_id, message} ->
+        drain_notes(ref, [{theory, task_id, message} | acc])
+    after
+      100 -> Enum.reverse(acc)
     end
   end
 

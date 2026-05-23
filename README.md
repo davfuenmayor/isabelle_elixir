@@ -35,15 +35,21 @@ servers, run smoke tests, build and start a `HOL` session, check theories,
 purge, stop, and clean up. The "Full" notebook additionally demonstrates
 concurrency-safe access.
 
-## Example
+## Setup
 
-Make sure Isabelle is available on `PATH`:
+The local server helpers read the full Isabelle executable path from
+`ISABELLE_TOOL`:
 
 ```sh
-export PATH=/path/to/Isabelle2025-2/bin:$PATH
+export ISABELLE_TOOL=/path/to/Isabelle2025-2/bin/isabelle
 ```
 
-Then:
+If `ISABELLE_TOOL` is not set, the library falls back to looking up `isabelle`
+on `PATH` and stores the resolved path in `ISABELLE_TOOL`.
+
+## Example
+
+Start a local `HOL` session and check theory text:
 
 ```elixir
 {:ok, task} =
@@ -66,15 +72,19 @@ IO.puts(Enum.join(IsabelleClient.messages(task), "\n"))
 
 `messages/1` returns the user-facing Isabelle messages as a list of strings.
 Use `diagnostics/1` when you need the raw message maps, including source
-positions. When Isabelle attaches a `"pos" => %{"line" => n}` field, all result
-helpers can filter by line:
+positions. When Isabelle attaches position fields, all result helpers can
+filter by line and by Isabelle symbol offset:
 
 ```elixir
 IsabelleClient.messages(task, line: 5)
+IsabelleClient.messages(task, line: 5, offset: 42)
 IsabelleClient.diagnostics(task, line: 5)
 IsabelleClient.warnings(task, line: 5..10)
 IsabelleClient.errors(task, line: [5, 10])
 ```
+
+`offset: n` matches diagnostics whose `pos.offset..pos.end_offset` range
+contains `n`.
 
 ### Keyword Arguments
 

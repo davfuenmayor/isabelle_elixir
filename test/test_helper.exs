@@ -1,7 +1,8 @@
 isabelle_bin = Path.expand("../../Isabelle2025-2/bin", __DIR__)
+isabelle_tool = Path.join(isabelle_bin, "isabelle")
 
-if File.exists?(Path.join(isabelle_bin, "isabelle")) do
-  System.put_env("PATH", isabelle_bin <> ":" <> System.get_env("PATH", ""))
+if File.exists?(isabelle_tool) do
+  System.put_env("ISABELLE_TOOL", isabelle_tool)
 end
 
 ExUnit.start()
@@ -14,7 +15,7 @@ defmodule IsabelleTestSupport do
   def session_timeout, do: @session_timeout
 
   def isabelle_available? do
-    System.find_executable("isabelle") != nil
+    match?({:ok, _}, IsabelleClient.Server.executable())
   end
 
   def with_server(test, fun) do
@@ -28,7 +29,7 @@ defmodule IsabelleTestSupport do
         IsabelleClientMini.kill_server(name)
       end
     else
-      flunk("isabelle executable not found on PATH")
+      flunk("isabelle executable not found; set ISABELLE_TOOL or add isabelle to PATH")
     end
   end
 

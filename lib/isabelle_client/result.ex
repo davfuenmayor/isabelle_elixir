@@ -14,7 +14,8 @@ defmodule IsabelleClient.Result do
   Returns raw diagnostic message maps from a `use_theories` task or result map.
 
   Pass `line: n`, `line: first..last`, or `line: [n, ...]` to keep only
-  diagnostics whose position has that source line.
+  diagnostics whose position has that source line. Pass `offset: n` to keep
+  only diagnostics whose `pos.offset..pos.end_offset` range contains `n`.
   """
   def diagnostics(result, opts \\ [])
 
@@ -47,21 +48,31 @@ defmodule IsabelleClient.Result do
     |> message_texts()
   end
 
-  defp filter_diagnostics(diagnostics, opts) do
-    case Keyword.get(opts, :line) do
-      nil -> diagnostics
-      line -> Enum.filter(diagnostics, &(line_number(&1) |> line_matches?(line)))
-    end
+  defp filter_diagnostics(diagnostics, opts),
+    do: Enum.filter(diagnostics, &diagnostic_matches?(&1, opts))
+
+  defp diagnostic_matches?(diagnostic, opts) do
+    line_matches?(line_number(diagnostic), Keyword.get(opts, :line)) and
+      offset_matches?(Map.get(diagnostic, "pos"), Keyword.get(opts, :offset))
   end
 
   defp line_number(%{"pos" => %{"line" => line}}), do: line
   defp line_number(_), do: nil
 
+  defp line_matches?(_line, nil), do: true
   defp line_matches?(nil, _wanted), do: false
   defp line_matches?(line, wanted) when is_integer(wanted), do: line == wanted
   defp line_matches?(line, %Range{} = wanted), do: line in wanted
   defp line_matches?(line, wanted) when is_list(wanted), do: line in wanted
   defp line_matches?(_line, _wanted), do: false
+
+  defp offset_matches?(_pos, nil), do: true
+
+  defp offset_matches?(%{"offset" => first, "end_offset" => last}, offset)
+       when is_integer(first) and is_integer(last) and is_integer(offset),
+       do: offset >= first and offset <= last
+
+  defp offset_matches?(_pos, _offset), do: false
 
   defp message_texts(diagnostics) do
     diagnostics

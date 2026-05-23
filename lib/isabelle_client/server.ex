@@ -5,7 +5,7 @@ defmodule IsabelleClient.Server do
 
   @default_name "elixir"
   @default_port 9999
-  @isabelle_exec "isabelle"
+  @isabelle_tool_env "ISABELLE_TOOL"
   @timeout 7_000
 
   @doc "Starts a local resident Isabelle server."
@@ -59,10 +59,28 @@ defmodule IsabelleClient.Server do
     |> Enum.map(fn info -> %{info | "port" => String.to_integer(info["port"])} end)
   end
 
-  defp executable do
-    case System.find_executable(@isabelle_exec) do
-      nil -> {:error, :isabelle_not_found}
+  @doc """
+  Returns the Isabelle tool executable path.
+
+  The path is read from `ISABELLE_TOOL` when set. Otherwise `isabelle` is
+  resolved from `PATH` and the resolved full path is stored in `ISABELLE_TOOL`.
+  """
+  def executable do
+    case System.get_env(@isabelle_tool_env) do
+      nil -> find_and_store_executable()
+      "" -> find_and_store_executable()
       exe -> {:ok, exe}
+    end
+  end
+
+  defp find_and_store_executable do
+    case System.find_executable("isabelle") do
+      nil ->
+        {:error, :isabelle_not_found}
+
+      exe ->
+        System.put_env(@isabelle_tool_env, exe)
+        {:ok, exe}
     end
   end
 end

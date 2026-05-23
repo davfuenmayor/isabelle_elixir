@@ -113,14 +113,31 @@ defmodule IsabelleProtocolTest do
         "nodes" => [
           %{
             "messages" => [
-              %{"message" => "first", "kind" => "writeln", "pos" => %{"line" => 1}},
-              %{"message" => "second", "kind" => "warning", "pos" => %{"line" => 2}}
+              %{
+                "message" => "line 1",
+                "kind" => "writeln",
+                "pos" => %{"line" => 1, "offset" => 10, "end_offset" => 15}
+              },
+              %{
+                "message" => "line 2 early",
+                "kind" => "warning",
+                "pos" => %{"line" => 2, "offset" => 20, "end_offset" => 25}
+              },
+              %{
+                "message" => "line 2 late",
+                "kind" => "writeln",
+                "pos" => %{"line" => 2, "offset" => 30, "end_offset" => 35}
+              }
             ]
           },
           %{
             "messages" => [
               %{"message" => "", "kind" => "writeln", "pos" => %{"line" => 2}},
-              %{"message" => "third", "kind" => "error", "pos" => %{"line" => 3}},
+              %{
+                "message" => "line 3",
+                "kind" => "error",
+                "pos" => %{"line" => 3, "offset" => 40, "end_offset" => 45}
+              },
               %{"message" => "unpositioned", "kind" => "writeln"}
             ]
           }
@@ -128,14 +145,29 @@ defmodule IsabelleProtocolTest do
       }
     }
 
-    assert Result.messages(task) == ["first", "second", "third", "unpositioned"]
-    assert IsabelleClient.messages(task) == ["first", "second", "third", "unpositioned"]
-    assert IsabelleClient.messages(task, line: 2) == ["second"]
-    assert IsabelleClient.messages(task, line: 2..3) == ["second", "third"]
-    assert IsabelleClient.messages(task, line: [1, 3]) == ["first", "third"]
-    assert IsabelleClient.warnings(task, line: 2) == ["second"]
-    assert IsabelleClient.errors(task, line: 3) == ["third"]
-    assert [%{"message" => "third"}] = IsabelleClient.diagnostics(task, line: 3)
+    assert Result.messages(task) == [
+             "line 1",
+             "line 2 early",
+             "line 2 late",
+             "line 3",
+             "unpositioned"
+           ]
+
+    assert IsabelleClient.messages(task, line: 2) == ["line 2 early", "line 2 late"]
+    assert IsabelleClient.messages(task, line: 2..3) == ["line 2 early", "line 2 late", "line 3"]
+    assert IsabelleClient.messages(task, line: [1, 3]) == ["line 1", "line 3"]
+
+    assert IsabelleClient.messages(task, offset: 20) == ["line 2 early"]
+    assert IsabelleClient.messages(task, offset: 25) == ["line 2 early"]
+    assert IsabelleClient.messages(task, offset: 32) == ["line 2 late"]
+    assert IsabelleClient.messages(task, offset: 45) == ["line 3"]
+    assert IsabelleClient.messages(task, offset: 46) == []
+
+    assert IsabelleClient.messages(task, line: 2, offset: 32) == ["line 2 late"]
+    assert IsabelleClient.messages(task, line: 3, offset: 32) == []
+    assert IsabelleClient.warnings(task, line: 2, offset: 22) == ["line 2 early"]
+    assert IsabelleClient.errors(task, offset: 42) == ["line 3"]
+    assert [%{"message" => "line 3"}] = IsabelleClient.diagnostics(task, line: 3)
     assert IsabelleClient.messages(%{"nodes" => []}) == []
   end
 
