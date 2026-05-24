@@ -60,4 +60,12 @@ defmodule IsabelleTestSupport do
       assert command in commands
     end
   end
+
+  def recv_line(socket, acc \\ []) do
+    case :gen_tcp.recv(socket, 1, 1_000) do
+      {:ok, "\n"} -> {:ok, IO.iodata_to_binary(acc)}
+      {:ok, byte} -> recv_line(socket, [acc, byte])
+      {:error, reason} -> {:error, reason}
+    end
+  end
 end

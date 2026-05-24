@@ -2,12 +2,13 @@ defmodule IsabelleClientFullTest do
   use ExUnit.Case, async: false
 
   alias IsabelleClient.Protocol
+  alias IsabelleClient.Session
   alias IsabelleClient.Task, as: IsabelleTask
 
   test "command timeout is applied to the socket receive, not only GenServer.call" do
     {:ok, pid, server} =
       start_fake_authenticated_server(fn socket, parent ->
-        {:ok, command} = recv_line(socket)
+        {:ok, command} = IsabelleTestSupport.recv_line(socket)
         send(parent, {:command, command})
       end)
 
@@ -21,7 +22,7 @@ defmodule IsabelleClientFullTest do
   test "async command timeout is applied while awaiting Isabelle task completion" do
     {:ok, pid, server} =
       start_fake_authenticated_server(fn socket, parent ->
-        {:ok, command} = recv_line(socket)
+        {:ok, command} = IsabelleTestSupport.recv_line(socket)
         send(parent, {:command, command})
         :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
       end)
@@ -33,16 +34,16 @@ defmodule IsabelleClientFullTest do
     assert_server_down(server)
   end
 
-  test "concurrent async tasks are routed by task id with note callbacks" do
+  test "concurrent async tasks are routed by task id with event callbacks" do
     parent = self()
 
     {:ok, pid, server} =
       start_fake_authenticated_server(fn socket, parent ->
-        {:ok, first} = recv_line(socket)
+        {:ok, first} = IsabelleTestSupport.recv_line(socket)
         send(parent, {:command, 1, first})
         :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
 
-        {:ok, second} = recv_line(socket)
+        {:ok, second} = IsabelleTestSupport.recv_line(socket)
         send(parent, {:command, 2, second})
         :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-2"}))
 
@@ -74,7 +75,7 @@ defmodule IsabelleClientFullTest do
     first =
       Elixir.Task.async(fn ->
         IsabelleClientFull.build_session(pid, [session: "First"], 1_000,
-          on_note: fn note -> send(parent, {:note, :first, note["task"], note["message"]}) end
+          on_event: fn event -> send(parent, {:event, :first, event}) end
         )
       end)
 
@@ -83,7 +84,7 @@ defmodule IsabelleClientFullTest do
     second =
       Elixir.Task.async(fn ->
         IsabelleClientFull.build_session(pid, [session: "Second"], 1_000,
-          on_note: fn note -> send(parent, {:note, :second, note["task"], note["message"]}) end
+          on_event: fn event -> send(parent, {:event, :second, event}) end
         )
       end)
 
@@ -105,11 +106,171 @@ defmodule IsabelleClientFullTest do
             }} =
              Elixir.Task.await(first)
 
-    assert_receive {:note, :first, "task-1", "first note"}
-    assert_receive {:note, :second, "task-2", "second note"}
+    assert_receive {:event, :first, %{type: :started, task: "task-1"}}
+    assert_receive {:event, :second, %{type: :started, task: "task-2"}}
+
+    assert_receive {:event, :first,
+                    %{type: :note, task: "task-1", body: %{"message" => "first note"}}}
+
+    assert_receive {:event, :second,
+                    %{type: :note, task: "task-2", body: %{"message" => "second note"}}}
+
+    assert_receive {:event, :first,
+                    %{type: :finished, task: "task-1", body: %{"name" => "first"}}}
+
+    assert_receive {:event, :second,
+                    %{type: :finished, task: "task-2", body: %{"name" => "second"}}}
 
     :ok = IsabelleClientFull.close(pid)
     assert_server_down(server)
+  end
+
+  test "async on_event receives failed task results" do
+    parent = self()
+
+    {:ok, pid, server} =
+      start_fake_authenticated_server(fn socket, parent ->
+        {:ok, command} = IsabelleTestSupport.recv_line(socket)
+        send(parent, {:command, command})
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
+
+        :ok =
+          :gen_tcp.send(
+            socket,
+            Protocol.command("FAILED", %{"task" => "task-1", "message" => "bad"})
+          )
+      end)
+
+    assert {:error, %IsabelleTask{status: :failed, result: %{"message" => "bad"}}} =
+             IsabelleClientFull.build_session(pid, [session: "Broken"], 1_000,
+               on_event: fn event -> send(parent, {:event, event}) end
+             )
+
+    assert_receive {:command, "session_build {\"session\":\"Broken\"}"}
+    assert_receive {:event, %{type: :started, task: "task-1"}}
+    assert_receive {:event, %{type: :failed, task: "task-1", body: %{"message" => "bad"}}}
+
+    :ok = IsabelleClientFull.close(pid)
+    assert_server_down(server)
+  end
+
+  @tag timeout: 180_000
+  test "GenServer client routes concurrent tasks across explicit sessions" do
+    IsabelleTestSupport.with_server("full_multi_session", fn server ->
+      assert {:ok, pid} =
+               IsabelleClientFull.connect(
+                 password: server["password"],
+                 host: server["host"],
+                 port: server["port"]
+               )
+
+      assert {:ok, %IsabelleTask{status: :finished} = first_task} =
+               IsabelleClientFull.start_session(
+                 pid,
+                 [session: "HOL"],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert %Session{id: first_id} = first_session = IsabelleClient.session(first_task)
+
+      assert {:ok, %IsabelleTask{status: :finished} = second_task} =
+               IsabelleClientFull.start_session(
+                 pid,
+                 [session: "HOL"],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert %Session{id: second_id} = second_session = IsabelleClient.session(second_task)
+      assert first_id != second_id
+
+      first_dir =
+        IsabelleTestSupport.theory_dir("full_multi_first", ~s(lemma "x = x"\n  by simp))
+
+      second_dir =
+        IsabelleTestSupport.theory_dir(
+          "full_multi_second",
+          ~s(lemma "xs @ [] = xs"\n  by simp)
+        )
+
+      parent = self()
+      event_ref = make_ref()
+      done_ref = make_ref()
+      release_ref = make_ref()
+
+      operations = [
+        {:first, first_session.id, first_dir, "theorem ?x = ?x"},
+        {:second, second_session.id, second_dir, "theorem ?xs @ [] = ?xs"}
+      ]
+
+      tasks =
+        Enum.map(operations, fn {label, session_id, theory_dir, expected} ->
+          Elixir.Task.async(fn ->
+            receive do
+              {:go, ^release_ref} -> :ok
+            end
+
+            on_event = fn
+              %{type: :note, task: task, body: %{"message" => message}} ->
+                send(parent, {:full_multi_note, event_ref, label, task, message})
+
+              _event ->
+                :ok
+            end
+
+            assert {:ok, %IsabelleTask{status: :finished, result: %{"ok" => true}} = use_task} =
+                     IsabelleClientFull.use_theories(
+                       pid,
+                       [session_id: session_id, theories: ["Example"], master_dir: theory_dir],
+                       IsabelleTestSupport.session_timeout(),
+                       on_event: on_event
+                     )
+
+            assert Enum.join(IsabelleClient.messages(use_task), "\n") =~ expected
+            send(parent, {:full_concurrent_result, done_ref, {label, use_task.id}})
+          end)
+        end)
+
+      Enum.each(tasks, &send(&1.pid, {:go, release_ref}))
+      results = collect_results(done_ref, 2, 120_000)
+      Enum.each(tasks, &Elixir.Task.await(&1, 1_000))
+
+      task_ids_by_label = Map.new(results)
+
+      notes_by_label =
+        event_ref
+        |> drain_notes(:full_multi_note)
+        |> Enum.group_by(fn {label, _task_id, _message} -> label end)
+
+      assert Map.keys(task_ids_by_label) |> Enum.sort() == [:first, :second]
+      assert Map.keys(notes_by_label) |> Enum.sort() == [:first, :second]
+
+      for {label, task_id} <- task_ids_by_label do
+        assert Enum.all?(notes_by_label[label], fn {_label, note_task_id, _message} ->
+                 note_task_id == task_id
+               end)
+      end
+
+      assert {:ok, %IsabelleTask{status: :finished, result: %{"ok" => true}}} =
+               IsabelleClientFull.stop_session(
+                 pid,
+                 first_session,
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert {:ok, %IsabelleTask{status: :finished, result: %{"ok" => true}} = active_task} =
+               IsabelleClientFull.use_theories(
+                 pid,
+                 [theories: ["Example"], master_dir: second_dir],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert Enum.join(IsabelleClient.messages(active_task), "\n") =~ "theorem ?xs @ [] = ?xs"
+
+      assert {:ok, %IsabelleTask{status: :finished, result: %{"ok" => true}}} =
+               IsabelleClientFull.stop_session(pid, IsabelleTestSupport.session_timeout())
+
+      assert :ok = IsabelleClientFull.close(pid)
+    end)
   end
 
   @tag timeout: 180_000
@@ -235,7 +396,7 @@ defmodule IsabelleClientFullTest do
         """)
       end
 
-      note_ref = make_ref()
+      event_ref = make_ref()
       theory_ref = make_ref()
       theory_release_ref = make_ref()
 
@@ -256,11 +417,12 @@ defmodule IsabelleClientFullTest do
             result =
               case operation do
                 {:use_theories, theory, expected_result} ->
-                  on_note = fn note ->
-                    send(
-                      parent,
-                      {:full_theory_note, note_ref, theory, note["task"], note["message"]}
-                    )
+                  on_event = fn
+                    %{type: :note, task: task, body: %{"message" => message}} ->
+                      send(parent, {:full_theory_note, event_ref, theory, task, message})
+
+                    _event ->
+                      :ok
                   end
 
                   assert {:ok,
@@ -269,7 +431,7 @@ defmodule IsabelleClientFullTest do
                              pid,
                              [theories: [theory], master_dir: theory_dir],
                              IsabelleTestSupport.session_timeout(),
-                             on_note: on_note
+                             on_event: on_event
                            )
 
                   assert [%{"theory_name" => theory_name}] = use_task.result["nodes"]
@@ -292,8 +454,8 @@ defmodule IsabelleClientFullTest do
       assert results_by_theory |> Map.keys() |> Enum.sort() == ~w(Example1 Example2 Example3)
 
       notes_by_theory =
-        note_ref
-        |> drain_notes()
+        event_ref
+        |> drain_notes(:full_theory_note)
         |> Enum.group_by(fn {theory, _task_id, _message} -> theory end)
 
       assert notes_by_theory |> Map.keys() |> Enum.sort() == ~w(Example1 Example2 Example3)
@@ -337,10 +499,10 @@ defmodule IsabelleClientFullTest do
     end
   end
 
-  defp drain_notes(ref, acc \\ []) do
+  defp drain_notes(ref, tag, acc \\ []) do
     receive do
-      {:full_theory_note, ^ref, theory, task_id, message} ->
-        drain_notes(ref, [{theory, task_id, message} | acc])
+      {^tag, ^ref, label, task_id, message} ->
+        drain_notes(ref, tag, [{label, task_id, message} | acc])
     after
       100 -> Enum.reverse(acc)
     end
@@ -354,7 +516,7 @@ defmodule IsabelleClientFullTest do
     server =
       spawn(fn ->
         {:ok, socket} = :gen_tcp.accept(listen)
-        {:ok, "secret"} = recv_line(socket)
+        {:ok, "secret"} = IsabelleTestSupport.recv_line(socket)
         :ok = :gen_tcp.send(socket, "OK\n")
         after_auth.(socket, parent)
         Process.sleep(:infinity)
@@ -363,14 +525,6 @@ defmodule IsabelleClientFullTest do
     {:ok, pid} = IsabelleClientFull.connect(password: "secret", host: "127.0.0.1", port: port)
     :gen_tcp.close(listen)
     {:ok, pid, server}
-  end
-
-  defp recv_line(socket, acc \\ []) do
-    case :gen_tcp.recv(socket, 1, 1_000) do
-      {:ok, "\n"} -> {:ok, IO.iodata_to_binary(acc)}
-      {:ok, byte} -> recv_line(socket, [acc, byte])
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp assert_server_down(server) do

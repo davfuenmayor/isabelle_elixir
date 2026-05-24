@@ -8,6 +8,30 @@ defmodule IsabelleClient.Server do
   @isabelle_tool_env "ISABELLE_TOOL"
   @timeout 7_000
 
+  defmodule Info do
+    @moduledoc """
+    Connection details for a resident Isabelle server.
+    """
+
+    defstruct [:name, :host, :port, :password]
+
+    @type t :: %__MODULE__{
+            name: String.t(),
+            host: String.t(),
+            port: non_neg_integer(),
+            password: String.t()
+          }
+
+    def fetch(%__MODULE__{name: name}, key) when key in [:name, "name"], do: {:ok, name}
+    def fetch(%__MODULE__{host: host}, key) when key in [:host, "host"], do: {:ok, host}
+    def fetch(%__MODULE__{port: port}, key) when key in [:port, "port"], do: {:ok, port}
+
+    def fetch(%__MODULE__{password: password}, key) when key in [:password, "password"],
+      do: {:ok, password}
+
+    def fetch(%__MODULE__{}, _key), do: :error
+  end
+
   @doc "Starts a local resident Isabelle server."
   def start(name \\ @default_name, port \\ @default_port) do
     with {:ok, exe} <- executable() do
@@ -47,7 +71,7 @@ defmodule IsabelleClient.Server do
     end
   end
 
-  @doc "Parses `isabelle server` output into server descriptor maps."
+  @doc "Parses `isabelle server` output into server info structs."
   def parse_info(data) when is_binary(data) do
     regex =
       ~r/server\s+["'](?<name>[^"']+)["']\s*=\s*(?<host>\d{1,3}(?:\.\d{1,3}){3}):(?<port>\d+)\s+\(password\s+["'](?<password>[^"']+)["']\)/
@@ -56,7 +80,14 @@ defmodule IsabelleClient.Server do
     |> String.split("\n", trim: true)
     |> Enum.map(&Regex.named_captures(regex, &1))
     |> Enum.reject(&is_nil/1)
-    |> Enum.map(fn info -> %{info | "port" => String.to_integer(info["port"])} end)
+    |> Enum.map(fn info ->
+      %Info{
+        name: info["name"],
+        host: info["host"],
+        port: String.to_integer(info["port"]),
+        password: info["password"]
+      }
+    end)
   end
 
   @doc """

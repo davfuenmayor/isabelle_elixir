@@ -29,8 +29,10 @@ defmodule IsabelleClient.Protocol do
   def send(socket, iodata), do: :gen_tcp.send(socket, iodata)
 
   def recv(socket, timeout \\ @timeout) do
-    with {:ok, line} <- recv_line(socket, timeout),
-         {:ok, raw, length} <- read_body(socket, line, timeout) do
+    deadline = deadline(timeout)
+
+    with {:ok, line} <- recv_line(socket, deadline),
+         {:ok, raw, length} <- read_body(socket, line, deadline) do
       parse(raw, length)
     end
   end
@@ -57,11 +59,11 @@ defmodule IsabelleClient.Protocol do
   def task_id(%Response{type: :ok, body: %{"task" => task}}), do: {:ok, task}
   def task_id(%Response{} = response), do: {:error, {:missing_task, response}}
 
-  defp read_body(socket, line, timeout) do
+  defp read_body(socket, line, deadline) do
     if digits?(line) do
       length = String.to_integer(line)
 
-      with {:ok, data} <- recv_exact(socket, length, timeout) do
+      with {:ok, data} <- recv_exact(socket, length, deadline) do
         {:ok, String.trim_trailing(data, "\n"), length}
       end
     else
@@ -69,22 +71,31 @@ defmodule IsabelleClient.Protocol do
     end
   end
 
-  defp recv_line(socket, timeout, acc \\ []) do
-    case :gen_tcp.recv(socket, 1, timeout) do
+  defp recv_line(socket, deadline, acc \\ []) do
+    case :gen_tcp.recv(socket, 1, remaining(deadline)) do
       {:ok, "\n"} -> {:ok, acc |> IO.iodata_to_binary() |> String.trim_trailing("\r")}
-      {:ok, byte} -> recv_line(socket, timeout, [acc, byte])
+      {:ok, byte} -> recv_line(socket, deadline, [acc, byte])
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp recv_exact(socket, length, timeout, acc \\ [])
-  defp recv_exact(_socket, 0, _timeout, acc), do: {:ok, IO.iodata_to_binary(acc)}
+  defp recv_exact(socket, length, deadline, acc \\ [])
+  defp recv_exact(_socket, 0, _deadline, acc), do: {:ok, IO.iodata_to_binary(acc)}
 
-  defp recv_exact(socket, length, timeout, acc) do
-    case :gen_tcp.recv(socket, length, timeout) do
-      {:ok, data} -> recv_exact(socket, length - byte_size(data), timeout, [acc, data])
+  defp recv_exact(socket, length, deadline, acc) do
+    case :gen_tcp.recv(socket, length, remaining(deadline)) do
+      {:ok, data} -> recv_exact(socket, length - byte_size(data), deadline, [acc, data])
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp deadline(:infinity), do: :infinity
+  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+
+  defp remaining(:infinity), do: :infinity
+
+  defp remaining(deadline) do
+    max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
   defp split_name(raw) do

@@ -12,6 +12,7 @@ defmodule IsabelleClientMini do
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
   alias IsabelleClient.Result
+  alias IsabelleClient.Session
   alias IsabelleClient.Server
   alias IsabelleClient.Task
 
@@ -104,13 +105,15 @@ defmodule IsabelleClientMini do
   def start_session(socket, args), do: async_command(socket, "session_start", args)
 
   @doc "Starts an Isabelle `session_stop` task for a session id."
+  def stop_session(socket, %Session{id: session_id}), do: stop_session(socket, session_id)
+
   def stop_session(socket, session_id),
     do: async_command(socket, "session_stop", %{"session_id" => session_id})
 
   @doc "Starts an Isabelle `use_theories` task."
   def use_theories(socket, args), do: async_command(socket, "use_theories", args)
 
-  @doc "Runs Isabelle `purge_theories` for an active session."
+  @doc "Runs Isabelle `purge_theories` for the given session arguments."
   def purge_theories(socket, args, timeout \\ @timeout),
     do: command(socket, "purge_theories", args, timeout)
 

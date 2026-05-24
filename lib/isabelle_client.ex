@@ -3,18 +3,21 @@ defmodule IsabelleClient do
   Stateful, single-process Isabelle client.
 
   This is the ergonomic client for scripts and LiveBooks. It keeps the socket
-  and current `session_id` in a struct, but it is not meant to be shared by
+  and current session in a struct, but it is not meant to be shared by
   multiple concurrent processes. Use `IsabelleClientFull` for that.
   """
 
   alias IsabelleClient.Arguments
   alias IsabelleClient.Result
+  alias IsabelleClient.Session
   alias IsabelleClient.Task
+  alias IsabelleClient.Theory
 
-  defstruct [:socket, :session_id, :tmp_dir, :server_name]
+  defstruct [:socket, :session, :session_id, :tmp_dir, :server_name]
 
   @type t :: %__MODULE__{
           socket: port(),
+          session: Session.t() | nil,
           session_id: String.t() | nil,
           tmp_dir: String.t() | nil,
           server_name: String.t() | nil
@@ -40,14 +43,14 @@ defmodule IsabelleClient do
 
     with {:ok, [server]} <- IsabelleClientMini.new_server(server_name, server_port),
          {:ok, client} <-
-           connect(server["password"],
-             host: server["host"],
-             port: server["port"],
+           connect(server.password,
+             host: server.host,
+             port: server.port,
              timeout: connect_timeout
            ) do
-      client = %{client | server_name: server["name"]}
+      client = %{client | server_name: server.name}
 
-      case start_session(client, session_args(opts), timeout) do
+      case start_session(client, Session.args(opts), timeout) do
         {:ok, _client, _task} = ok ->
           ok
 
@@ -113,86 +116,122 @@ defmodule IsabelleClient do
     with {:ok, task} <- IsabelleClientMini.start_session(socket, args),
          {:ok, %Task{result: %{"session_id" => session_id} = result} = task} <-
            IsabelleClientMini.await_task(socket, task, timeout) do
-      {:ok, %{client | session_id: session_id, tmp_dir: Map.get(result, "tmp_dir")}, task}
+      session = Session.from_result(result)
+      {:ok, %{client | session: session, session_id: session_id, tmp_dir: session.tmp_dir}, task}
     end
   end
 
-  @doc "Stops the active Isabelle session and clears `session_id`."
-  def stop_session(client, timeout \\ :infinity)
+  @doc """
+  Stops a session.
 
-  def stop_session(%__MODULE__{session_id: nil}, _timeout), do: {:error, :no_session}
+  With the default arguments, this stops the active session and clears it from
+  the client. Pass a `%IsabelleClient.Session{}` or session id to stop another
+  server session explicitly.
+  """
+  def stop_session(client, session_or_timeout \\ :active, timeout \\ :infinity)
 
-  def stop_session(
-        %__MODULE__{socket: socket, session_id: session_id} = client,
-        timeout
-      ) do
+  def stop_session(%__MODULE__{} = client, timeout, :infinity)
+      when is_integer(timeout) or timeout == :infinity do
+    stop_session(client, :active, timeout)
+  end
+
+  def stop_session(%__MODULE__{} = client, :active, timeout) do
+    case client.session_id do
+      nil -> {:error, :no_session}
+      session_id -> do_stop_session(client, session_id, timeout)
+    end
+  end
+
+  def stop_session(%__MODULE__{} = client, session_or_id, timeout) do
+    do_stop_session(client, Session.id(session_or_id), timeout)
+  end
+
+  defp do_stop_session(%__MODULE__{socket: socket} = client, session_id, timeout) do
     with {:ok, task} <- IsabelleClientMini.stop_session(socket, session_id),
          result <- IsabelleClientMini.await_task(socket, task, timeout) do
+      client = Session.clear_active(client, session_id)
+
       case result do
-        {:ok, task} -> {:ok, %{client | session_id: nil, tmp_dir: nil}, task}
-        {:error, task} -> {:error, %{client | session_id: nil, tmp_dir: nil}, task}
+        {:ok, task} -> {:ok, client, task}
+        {:error, task} -> {:error, client, task}
       end
     end
   end
 
-  @doc "Checks theories in the active session and waits for the task result."
+  @doc """
+  Checks theories and waits for the task result.
+
+  By default this uses the active client session. Pass `"session_id"` or
+  `:session_id` in the arguments to use another server session explicitly.
+  """
   def use_theories(client, args \\ nil, timeout \\ :infinity)
 
-  def use_theories(%__MODULE__{session_id: nil}, _args, _timeout),
-    do: {:error, :no_session}
-
   def use_theories(
-        %__MODULE__{socket: socket, session_id: session_id},
+        %__MODULE__{socket: socket} = client,
         args,
         timeout
       ) do
     args = Arguments.normalize(args)
-    args = Map.put_new(args, "session_id", session_id)
 
-    with {:ok, task} <- IsabelleClientMini.use_theories(socket, args) do
-      IsabelleClientMini.await_task(socket, task, timeout)
+    case Session.put_id(args, client.session_id) do
+      {:ok, args} ->
+        with {:ok, task} <- IsabelleClientMini.use_theories(socket, args) do
+          IsabelleClientMini.await_task(socket, task, timeout)
+        end
+
+      :error ->
+        {:error, :no_session}
     end
   end
 
-  @doc "Purges theories from the active session."
+  @doc """
+  Purges theories from a session.
+
+  By default this uses the active client session. Pass `"session_id"` or
+  `:session_id` in the arguments to purge theories from another server session.
+  """
   def purge_theories(client, args \\ nil, timeout \\ 30_000)
 
-  def purge_theories(%__MODULE__{session_id: nil}, _args, _timeout), do: {:error, :no_session}
-
-  def purge_theories(%__MODULE__{socket: socket, session_id: session_id}, args, timeout) do
+  def purge_theories(%__MODULE__{socket: socket} = client, args, timeout) do
     args = Arguments.normalize(args)
-    args = Map.put_new(args, "session_id", session_id)
-    IsabelleClientMini.purge_theories(socket, args, timeout)
-  end
 
-  @doc "Checks an existing `.thy` file in the active session."
-  def check_file(client, path, args \\ [], timeout \\ :infinity)
-
-  def check_file(%__MODULE__{} = client, path, args, timeout) do
-    args =
-      args
-      |> Arguments.normalize()
-      |> Map.put_new("master_dir", Path.dirname(path))
-      |> Map.put_new("theories", [path |> Path.basename() |> Path.rootname()])
-
-    use_theories(client, args, timeout)
+    case Session.put_id(args, client.session_id) do
+      {:ok, args} -> IsabelleClientMini.purge_theories(socket, args, timeout)
+      :error -> {:error, :no_session}
+    end
   end
 
   @doc """
-  Writes and checks a theory in the active session.
+  Checks an existing `.thy` file.
+
+  By default this uses the active client session. Pass `"session_id"` or
+  `:session_id` in the arguments to use another server session explicitly.
+  """
+  def check_file(client, path, args \\ [], timeout \\ :infinity)
+
+  def check_file(%__MODULE__{} = client, path, args, timeout) do
+    use_theories(client, Theory.file_args(path, args), timeout)
+  end
+
+  @doc """
+  Writes and checks a theory.
 
   If `text` is not a complete theory, it is wrapped as a theory body importing
-  `Main`, or `opts[:imports]` when provided.
+  `Main`, or `opts[:imports]` when provided. By default this uses the active
+  client session. Pass `"session_id"` or `:session_id` in the options to use
+  another server session explicitly.
   """
   def check_text(client, theory, text, opts \\ [], timeout \\ :infinity)
 
   def check_text(%__MODULE__{} = client, theory, text, opts, timeout) do
     opts = Arguments.normalize(opts)
-    master_dir = Map.get(opts, "master_dir") || client.tmp_dir || fresh_tmp_dir()
+    master_dir = Map.get(opts, "master_dir") || Session.default_master_dir(client, opts)
     File.mkdir_p!(master_dir)
 
-    source = theory_source(theory, text, Map.get(opts, "imports", "Main"))
-    File.write!(Path.join(master_dir, theory_file(theory)), source)
+    File.write!(
+      Path.join(master_dir, Theory.file(theory)),
+      Theory.source(theory, text, Map.get(opts, "imports", "Main"))
+    )
 
     use_theories(
       client,
@@ -207,7 +246,27 @@ defmodule IsabelleClient do
   @doc "Extracts the `session_id` from a finished session-start task or result map."
   defdelegate extract_session(result), to: Result
 
-  @doc "Returns raw diagnostic message maps from a `use_theories` task or result map."
+  @doc "Returns a typed session struct from a session-start task or result map."
+  def session(%Task{result: result}), do: session(result)
+  def session(result), do: Session.from_result(result)
+
+  @doc "Returns a structured `use_theories` result, or `nil` for another result shape."
+  defdelegate use_theories_result(result), to: Result
+
+  @doc "Returns typed theory nodes from a `use_theories` result."
+  defdelegate nodes(result), to: Result
+
+  @doc "Finds a typed theory node by `node_name` or `theory_name`."
+  defdelegate node(result, name), to: Result
+
+  @doc "Returns typed exports from all theory nodes in a `use_theories` result."
+  defdelegate exports(result), to: Result
+
+  @doc "Returns typed top-level error messages from a `use_theories` result."
+  defdelegate top_level_errors(result), to: Result
+  defdelegate top_level_errors(result, opts), to: Result
+
+  @doc "Returns diagnostic messages from a `use_theories` task or result."
   defdelegate diagnostics(result), to: Result
   defdelegate diagnostics(result, opts), to: Result
 
@@ -222,39 +281,6 @@ defmodule IsabelleClient do
   @doc "Returns warning messages from a `use_theories` task or result map."
   defdelegate warnings(result), to: Result
   defdelegate warnings(result, opts), to: Result
-
-  defp session_args(opts) do
-    opts
-    |> Keyword.get(:session_args, [])
-    |> Arguments.normalize()
-    |> Map.put_new("session", Keyword.get(opts, :session, "HOL"))
-  end
-
-  defp theory_source(theory, text, imports) do
-    if Regex.match?(~r/\A\s*theory\s+/u, text) do
-      text
-    else
-      """
-      theory #{theory} imports #{imports}
-      begin
-
-      #{text}
-
-      end
-      """
-    end
-  end
-
-  defp theory_file(theory) do
-    theory
-    |> String.split(".")
-    |> List.last()
-    |> Kernel.<>(".thy")
-  end
-
-  defp fresh_tmp_dir do
-    Path.join(System.tmp_dir!(), "isabelle_elixir_#{System.unique_integer([:positive])}")
-  end
 
   defp unique_server_name do
     "isabelle_elixir_#{System.unique_integer([:positive])}"

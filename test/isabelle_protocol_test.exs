@@ -5,7 +5,10 @@ defmodule IsabelleProtocolTest do
   alias IsabelleClient.Protocol.Response
   alias IsabelleClient.Arguments
   alias IsabelleClient.Result
+  alias IsabelleClient.Result.UseTheoriesResult
+  alias IsabelleClient.Session
   alias IsabelleClient.Server
+  alias IsabelleClient.Server.Info
   alias IsabelleClient.Task
 
   test "encodes short and long Isabelle line messages" do
@@ -98,20 +101,64 @@ defmodule IsabelleProtocolTest do
     assert_receive {:DOWN, ^ref, :process, ^server, _}
   end
 
+  test "applies receive timeout as one frame deadline" do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listen)
+
+    server =
+      spawn(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen)
+
+        for byte <- String.graphemes("OK true\n") do
+          :gen_tcp.send(socket, byte)
+          Process.sleep(20)
+        end
+
+        :gen_tcp.close(socket)
+      end)
+
+    {:ok, client} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
+
+    started = System.monotonic_time(:millisecond)
+    assert Protocol.recv(client, 50) == {:error, :timeout}
+    assert System.monotonic_time(:millisecond) - started < 150
+
+    :gen_tcp.close(client)
+    :gen_tcp.close(listen)
+    ref = Process.monitor(server)
+    Process.exit(server, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^server, _}
+  end
+
   test "parses Isabelle server info" do
     data = "server \"elixir\" = 127.0.0.1:9999 (password \"secret\")\n"
 
     assert Server.parse_info(data) == [
-             %{"name" => "elixir", "host" => "127.0.0.1", "port" => 9999, "password" => "secret"}
+             %Info{name: "elixir", host: "127.0.0.1", port: 9999, password: "secret"}
            ]
+
+    assert [%{} = info] = Server.parse_info(data)
+    assert info.name == "elixir"
+    assert info["password"] == "secret"
+    assert info[:password] == "secret"
   end
 
   test "extracts use_theories messages" do
     task = %Task{
       status: :finished,
       result: %{
+        "errors" => [
+          %{
+            "message" => "top-level error",
+            "kind" => "error",
+            "pos" => %{"line" => 4, "offset" => 50, "end_offset" => 55}
+          }
+        ],
         "nodes" => [
           %{
+            "node_name" => "node-1",
+            "theory_name" => "Draft.One",
+            "status" => %{"ok" => true},
             "messages" => [
               %{
                 "message" => "line 1",
@@ -128,9 +175,15 @@ defmodule IsabelleProtocolTest do
                 "kind" => "writeln",
                 "pos" => %{"line" => 2, "offset" => 30, "end_offset" => 35}
               }
+            ],
+            "exports" => [
+              %{"name" => "export/one", "base64" => false, "body" => "plain"}
             ]
           },
           %{
+            "node_name" => "node-2",
+            "theory_name" => "Draft.Two",
+            "status" => %{"ok" => false},
             "messages" => [
               %{"message" => "", "kind" => "writeln", "pos" => %{"line" => 2}},
               %{
@@ -166,17 +219,44 @@ defmodule IsabelleProtocolTest do
     assert IsabelleClient.messages(task, line: 2, offset: 32) == ["line 2 late"]
     assert IsabelleClient.messages(task, line: 3, offset: 32) == []
     assert IsabelleClient.warnings(task, line: 2, offset: 22) == ["line 2 early"]
+    assert IsabelleClient.errors(task) == ["top-level error", "line 3"]
     assert IsabelleClient.errors(task, offset: 42) == ["line 3"]
+    assert IsabelleClient.errors(task, line: 4) == ["top-level error"]
     assert [%{"message" => "line 3"}] = IsabelleClient.diagnostics(task, line: 3)
     assert IsabelleClient.messages(%{"nodes" => []}) == []
+
+    assert %UseTheoriesResult{ok: nil, errors: [top_level], nodes: [first, second]} =
+             IsabelleClient.use_theories_result(task)
+
+    assert top_level.message == "top-level error"
+    assert first.node_name == "node-1"
+    assert first.theory_name == "Draft.One"
+    assert first.status == %{"ok" => true}
+    assert first.raw["node_name"] == "node-1"
+
+    assert IsabelleClient.nodes(task) == [first, second]
+    assert IsabelleClient.node(task, "node-1") == first
+    assert IsabelleClient.node(task, "Draft.Two") == second
+    assert [%{name: "export/one", base64: false, body: "plain"}] = IsabelleClient.exports(task)
+    assert [^top_level] = IsabelleClient.top_level_errors(task)
+
+    node_error = Enum.find(second.messages, &(&1.kind == "error"))
+    assert node_error.pos.line == 3
+    assert IsabelleClient.messages(Result.decode(task), line: 3) == ["line 3"]
+    assert IsabelleClient.errors(Result.decode(task)) == ["top-level error", "line 3"]
   end
 
   test "extracts session ids from tasks and result maps" do
     task = %Task{status: :finished, result: %{"session_id" => "session-123"}}
 
     assert Result.extract_session(task) == "session-123"
+    assert Result.extract_session(%Session{id: "session-123"}) == "session-123"
     assert IsabelleClient.extract_session(task) == "session-123"
     assert IsabelleClientMini.extract_session(%{"session_id" => "session-123"}) == "session-123"
+    assert %Session{} = session = Result.decode(task)
+    assert session == %Session{id: "session-123", tmp_dir: nil}
+    assert session["session_id"] == "session-123"
+    assert session[:session_id] == "session-123"
     assert Result.extract_session(%{}) == nil
   end
 

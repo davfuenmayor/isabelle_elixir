@@ -11,7 +11,9 @@ defmodule IsabelleClientFull do
   alias IsabelleClient.Arguments
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
+  alias IsabelleClient.Session
   alias IsabelleClient.Task
+  alias IsabelleClient.Theory
 
   @default_timeout 30_000
   @call_timeout_grace 1_000
@@ -40,38 +42,78 @@ defmodule IsabelleClientFull do
   @doc "Asks the Isabelle server process to shut down."
   def shutdown_server(server), do: command(server, "shutdown")
 
-  @doc "Builds an Isabelle session image and waits for the task result."
+  @doc """
+  Builds an Isabelle session image and waits for the task result.
+
+  Options:
+
+    * `:on_event` - called with `%{type: type, task: id, body: body}` for
+      `:started`, `:note`, `:finished`, and `:failed` task events
+  """
   def build_session(server, args, timeout \\ :infinity, opts \\ []),
     do: async_call(server, :build_session, args, timeout, opts)
 
-  @doc "Starts an Isabelle session and stores its `session_id` in the client process."
+  @doc """
+  Starts an Isabelle session and stores its `session_id` in the client process.
+
+  Accepts the same async task options as `build_session/4`.
+  """
   def start_session(server, args, timeout \\ :infinity, opts \\ []),
     do: async_call(server, :start_session, args, timeout, opts)
 
-  @doc "Stops the active Isabelle session."
-  def stop_session(server, timeout \\ :infinity, opts \\ []),
+  @doc "Stops the active Isabelle session. Accepts the same async task options as `build_session/4`."
+  def stop_session(server), do: stop_session(server, :infinity, [])
+
+  def stop_session(server, timeout) when is_integer(timeout) or timeout == :infinity,
+    do: stop_session(server, timeout, [])
+
+  def stop_session(server, timeout, opts) when is_integer(timeout) or timeout == :infinity,
     do: GenServer.call(server, {:stop_session, timeout, opts}, call_timeout(timeout))
 
-  @doc "Checks theories in the active session and waits for the task result."
+  def stop_session(server, session_or_id, timeout),
+    do: stop_session(server, session_or_id, timeout, [])
+
+  @doc "Stops an explicit Isabelle session id or `%IsabelleClient.Session{}`."
+  def stop_session(server, session_or_id, timeout, opts) do
+    GenServer.call(server, {:stop_session, session_or_id, timeout, opts}, call_timeout(timeout))
+  end
+
+  @doc """
+  Checks theories and waits for the task result.
+
+  By default this uses the active client session. Pass `"session_id"` or
+  `:session_id` in the arguments to use another server session explicitly.
+
+  Accepts the same async task options as `build_session/4`.
+  """
   def use_theories(server, args, timeout \\ :infinity, opts \\ []),
     do: async_call(server, :use_theories, args, timeout, opts)
 
-  @doc "Purges theories from the active session."
+  @doc """
+  Purges theories from a session.
+
+  By default this uses the active client session. Pass `"session_id"` or
+  `:session_id` in the arguments to purge theories from another server session.
+  """
   def purge_theories(server, args, timeout \\ @default_timeout),
     do: GenServer.call(server, {:purge_theories, args, timeout}, call_timeout(timeout))
 
-  @doc "Checks an existing `.thy` file in the active session."
-  def check_file(server, path, args \\ [], timeout \\ :infinity, opts \\ []) do
-    args =
-      args
-      |> Arguments.normalize()
-      |> Map.put_new("master_dir", Path.dirname(path))
-      |> Map.put_new("theories", [path |> Path.basename() |> Path.rootname()])
+  @doc """
+  Checks an existing `.thy` file.
 
-    use_theories(server, args, timeout, opts)
+  By default this uses the active client session. Pass `"session_id"` or
+  `:session_id` in the arguments to use another server session explicitly.
+  """
+  def check_file(server, path, args \\ [], timeout \\ :infinity, opts \\ []) do
+    use_theories(server, Theory.file_args(path, args), timeout, opts)
   end
 
-  @doc "Writes and checks a theory in the active session."
+  @doc """
+  Writes and checks a theory.
+
+  By default this uses the active client session. Pass `"session_id"` or
+  `:session_id` in the options to use another server session explicitly.
+  """
   def check_text(server, theory, text, opts \\ [], timeout \\ :infinity) do
     GenServer.call(server, {:check_text, theory, text, opts, timeout}, call_timeout(timeout))
   end
@@ -103,8 +145,8 @@ defmodule IsabelleClientFull do
     enqueue_async(state, from, action, args, timeout, opts)
   end
 
-  def handle_call({:async, action, args, timeout, opts}, from, state) do
-    with_session(state, fn state ->
+  def handle_call({:async, :use_theories = action, args, timeout, opts}, from, state) do
+    with_session_args(state, args, fn state ->
       enqueue_async(state, from, action, args, timeout, opts)
     end)
   end
@@ -114,7 +156,7 @@ defmodule IsabelleClientFull do
       enqueue_async(
         state,
         from,
-        :stop_session,
+        {:stop_session, client.session_id},
         %{"session_id" => client.session_id},
         timeout,
         opts
@@ -122,22 +164,39 @@ defmodule IsabelleClientFull do
     end)
   end
 
+  def handle_call({:stop_session, session_or_id, timeout, opts}, from, state) do
+    session_id = Session.id(session_or_id)
+
+    enqueue_async(
+      state,
+      from,
+      {:stop_session, session_id},
+      %{"session_id" => session_id},
+      timeout,
+      opts
+    )
+  end
+
   def handle_call({:purge_theories, args, timeout}, from, state) do
-    with_session(state, fn %{client: client} = state ->
-      args = args |> Arguments.normalize() |> Map.put_new("session_id", client.session_id)
+    with_session_args(state, args, fn %{client: client} = state ->
+      {:ok, args} =
+        args
+        |> Arguments.normalize()
+        |> Session.put_id(client.session_id)
+
       enqueue_command(state, from, "purge_theories", args, {:sync, timeout})
     end)
   end
 
   def handle_call({:check_text, theory, text, opts, timeout}, from, state) do
-    with_session(state, fn %{client: client} = state ->
+    with_session_args(state, opts, fn %{client: client} = state ->
       opts = Arguments.normalize(opts)
-      master_dir = Map.get(opts, "master_dir") || client.tmp_dir || fresh_tmp_dir()
+      master_dir = Map.get(opts, "master_dir") || Session.default_master_dir(client, opts)
       File.mkdir_p!(master_dir)
 
       File.write!(
-        Path.join(master_dir, theory_file(theory)),
-        theory_source(theory, text, Map.get(opts, "imports", "Main"))
+        Path.join(master_dir, Theory.file(theory)),
+        Theory.source(theory, text, Map.get(opts, "imports", "Main"))
       )
 
       args =
@@ -212,7 +271,7 @@ defmodule IsabelleClientFull do
         {:noreply, state}
 
       task ->
-        notify(task.on_note, note)
+        notify_event(task.on_event, :note, note)
 
         {:noreply,
          %{state | tasks: Map.put(state.tasks, id, %{task | notes: [note | task.notes]})}}
@@ -238,6 +297,7 @@ defmodule IsabelleClientFull do
 
       {waiter, tasks} ->
         cancel_timer(waiter.timer)
+        notify_event(waiter.on_event, type, result)
         task = finish_task(waiter.task, type, result, waiter.notes)
         {reply, client} = task_reply(waiter.action, task, state.client)
         GenServer.reply(waiter.from, reply)
@@ -257,11 +317,13 @@ defmodule IsabelleClientFull do
       waiter = %{
         action: action,
         from: from,
-        on_note: Keyword.get(opts, :on_note),
+        on_event: Keyword.get(opts, :on_event),
         task: Task.new(id),
         timer: task_timer(id, timeout),
         notes: []
       }
+
+      notify_event(waiter.on_event, :started, %{"task" => id})
 
       {:noreply, %{state | tasks: Map.put(state.tasks, id, waiter)}}
     else
@@ -272,12 +334,13 @@ defmodule IsabelleClientFull do
   end
 
   defp task_reply(:start_session, %Task{status: :finished, result: result} = task, client) do
-    client = %{client | session_id: result["session_id"], tmp_dir: result["tmp_dir"]}
+    session = Session.from_result(result)
+    client = %{client | session: session, session_id: session.id, tmp_dir: session.tmp_dir}
     {{:ok, task}, client}
   end
 
-  defp task_reply(:stop_session, task, client) do
-    {task_result(task), %{client | session_id: nil, tmp_dir: nil}}
+  defp task_reply({:stop_session, session_id}, task, client) do
+    {task_result(task), Session.clear_active(client, session_id)}
   end
 
   defp task_reply(_action, task, client), do: {task_result(task), client}
@@ -296,8 +359,14 @@ defmodule IsabelleClientFull do
 
   defp with_session(state, fun), do: fun.(state)
 
-  defp maybe_session_id(args, session_id, action) when action in [:use_theories],
-    do: Map.put_new(args, "session_id", session_id)
+  defp with_session_args(%{client: %{session_id: nil}} = state, args, fun) do
+    if Session.has_id?(args), do: fun.(state), else: {:reply, {:error, :no_session}, state}
+  end
+
+  defp with_session_args(state, _args, fun), do: fun.(state)
+
+  defp maybe_session_id(args, session_id, :use_theories),
+    do: args |> Session.put_id(session_id) |> elem(1)
 
   defp maybe_session_id(args, _session_id, _action), do: args
 
@@ -305,6 +374,7 @@ defmodule IsabelleClientFull do
   defp command_name(:start_session), do: "session_start"
   defp command_name(:use_theories), do: "use_theories"
   defp command_name(:stop_session), do: "session_stop"
+  defp command_name({:stop_session, _session_id}), do: "session_stop"
 
   defp normalize_arg(nil), do: nil
   defp normalize_arg(arg), do: Arguments.normalize(arg)
@@ -328,8 +398,11 @@ defmodule IsabelleClientFull do
     {request, Enum.reject(pending, &(&1.ref == ref))}
   end
 
-  defp notify(nil, _note), do: :ok
-  defp notify(fun, note) when is_function(fun, 1), do: fun.(note)
+  defp notify_event(nil, _type, _body), do: :ok
+  defp notify_event(fun, type, body) when is_function(fun, 1), do: fun.(event(type, body))
+
+  defp event(type, %{"task" => task} = body), do: %{type: type, task: task, body: body}
+  defp event(type, body), do: %{type: type, task: nil, body: body}
 
   defp fail_waiters(state, reason) do
     Enum.each(state.pending, &GenServer.reply(&1.from, {:error, reason}))
@@ -365,7 +438,7 @@ defmodule IsabelleClientFull do
     if Keyword.has_key?(opts, :session) do
       case IsabelleClient.start_session(
              client,
-             session_args(opts),
+             Session.args(opts),
              Keyword.get(opts, :timeout, :infinity)
            ) do
         {:ok, client, _task} -> {:ok, client}
@@ -405,33 +478,6 @@ defmodule IsabelleClientFull do
         send(parent, {:isabelle_reader_error, reason})
     end
   end
-
-  defp session_args(opts) do
-    opts
-    |> Keyword.get(:session_args, [])
-    |> Arguments.normalize()
-    |> Map.put_new("session", Keyword.get(opts, :session, "HOL"))
-  end
-
-  defp theory_source(theory, text, imports) do
-    if Regex.match?(~r/\A\s*theory\s+/u, text) do
-      text
-    else
-      """
-      theory #{theory} imports #{imports}
-      begin
-
-      #{text}
-
-      end
-      """
-    end
-  end
-
-  defp theory_file(theory), do: theory |> String.split(".") |> List.last() |> Kernel.<>(".thy")
-
-  defp fresh_tmp_dir,
-    do: Path.join(System.tmp_dir!(), "isabelle_elixir_#{System.unique_integer([:positive])}")
 
   defp call_timeout(:infinity), do: :infinity
 

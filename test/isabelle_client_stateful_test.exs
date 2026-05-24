@@ -1,8 +1,110 @@
 defmodule IsabelleClientStatefulTest do
   use ExUnit.Case, async: false
 
+  alias IsabelleClient.Session
   alias IsabelleClient.Task
   alias IsabelleClient.Protocol
+
+  @tag timeout: 180_000
+  test "stateful client can use and stop explicit sessions independently" do
+    IsabelleTestSupport.with_server("stateful_multi_session", fn server ->
+      assert {:ok, client} =
+               IsabelleClient.connect(server["password"],
+                 host: server["host"],
+                 port: server["port"]
+               )
+
+      assert {:ok, client, %Task{status: :finished} = first_task} =
+               IsabelleClient.start_session(
+                 client,
+                 [session: "HOL"],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      first_session = IsabelleClient.session(first_task)
+      assert %Session{id: first_id, tmp_dir: first_tmp_dir} = first_session
+      assert client.session == first_session
+
+      assert {:ok, client, %Task{status: :finished} = second_task} =
+               IsabelleClient.start_session(
+                 client,
+                 [session: "HOL"],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      second_session = IsabelleClient.session(second_task)
+      assert %Session{id: second_id, tmp_dir: second_tmp_dir} = second_session
+      assert first_id != second_id
+      assert first_tmp_dir != second_tmp_dir
+      assert client.session == second_session
+
+      first_dir =
+        IsabelleTestSupport.theory_dir("stateful_multi_first", ~s(lemma "x = x"\n  by simp))
+
+      second_dir =
+        IsabelleTestSupport.theory_dir(
+          "stateful_multi_second",
+          ~s(lemma "xs @ [] = xs"\n  by simp)
+        )
+
+      assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = first_use} =
+               IsabelleClient.use_theories(
+                 client,
+                 [session_id: first_session.id, theories: ["Example"], master_dir: first_dir],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert_messages_contain(first_use, "theorem ?x = ?x")
+
+      assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = first_text} =
+               IsabelleClient.check_text(
+                 client,
+                 "ExplicitScratch",
+                 ~s(lemma "x = x"\n  by simp),
+                 [session_id: first_session.id],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert_messages_contain(first_text, "theorem ?x = ?x")
+
+      assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = second_use} =
+               IsabelleClient.use_theories(
+                 client,
+                 [theories: ["Example"], master_dir: second_dir],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert_messages_contain(second_use, "theorem ?xs @ [] = ?xs")
+
+      assert {:ok, client, %Task{status: :finished, result: %{"ok" => true}}} =
+               IsabelleClient.stop_session(
+                 client,
+                 first_session,
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert client.session_id == second_id
+      assert client.session == second_session
+
+      assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = second_use_again} =
+               IsabelleClient.use_theories(
+                 client,
+                 [theories: ["Example"], master_dir: second_dir],
+                 IsabelleTestSupport.session_timeout()
+               )
+
+      assert_messages_contain(second_use_again, "theorem ?xs @ [] = ?xs")
+
+      assert {:ok, client, %Task{status: :finished, result: %{"ok" => true}}} =
+               IsabelleClient.stop_session(client, IsabelleTestSupport.session_timeout())
+
+      assert client.session_id == nil
+      assert client.session == nil
+
+      assert {:ok, nil} = IsabelleClient.shutdown_server(client)
+      assert :ok = IsabelleClient.close(client)
+    end)
+  end
 
   @tag timeout: 180_000
   test "stateful client tracks sessions and exercises convenience APIs" do
@@ -62,15 +164,7 @@ defmodule IsabelleClientStatefulTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      use_line_5 = Enum.join(IsabelleClient.messages(use_task, line: 5), "\n")
-      use_line_6 = Enum.join(IsabelleClient.messages(use_task, line: 6), "\n")
-      use_line_9 = Enum.join(IsabelleClient.messages(use_task, line: 9), "\n")
-      use_line_10 = Enum.join(IsabelleClient.messages(use_task, line: 10), "\n")
-
-      assert use_line_5 =~ "Sledgehammering"
-      assert use_line_6 =~ "theorem ?x = ?x"
-      assert use_line_9 =~ "Sledgehammering"
-      assert use_line_10 =~ "theorem ?xs @ [] = ?xs"
+      assert_example_messages(use_task)
 
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = check_file_task} =
                IsabelleClient.check_file(
@@ -80,15 +174,7 @@ defmodule IsabelleClientStatefulTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      file_line_5 = Enum.join(IsabelleClient.messages(check_file_task, line: 5), "\n")
-      file_line_6 = Enum.join(IsabelleClient.messages(check_file_task, line: 6), "\n")
-      file_line_9 = Enum.join(IsabelleClient.messages(check_file_task, line: 9), "\n")
-      file_line_10 = Enum.join(IsabelleClient.messages(check_file_task, line: 10), "\n")
-
-      assert file_line_5 =~ "Sledgehammering"
-      assert file_line_6 =~ "theorem ?x = ?x"
-      assert file_line_9 =~ "Sledgehammering"
-      assert file_line_10 =~ "theorem ?xs @ [] = ?xs"
+      assert_example_messages(check_file_task)
 
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}} = check_text_task} =
                IsabelleClient.check_text(
@@ -99,15 +185,7 @@ defmodule IsabelleClientStatefulTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      text_line_5 = Enum.join(IsabelleClient.messages(check_text_task, line: 5), "\n")
-      text_line_6 = Enum.join(IsabelleClient.messages(check_text_task, line: 6), "\n")
-      text_line_9 = Enum.join(IsabelleClient.messages(check_text_task, line: 9), "\n")
-      text_line_10 = Enum.join(IsabelleClient.messages(check_text_task, line: 10), "\n")
-
-      assert text_line_5 =~ "Sledgehammering"
-      assert text_line_6 =~ "theorem ?x = ?x"
-      assert text_line_9 =~ "Sledgehammering"
-      assert text_line_10 =~ "theorem ?xs @ [] = ?xs"
+      assert_example_messages(check_text_task)
 
       [%{"pos" => %{"offset" => proof_offset}} | _] =
         IsabelleClient.diagnostics(check_text_task, line: 6)
@@ -165,7 +243,7 @@ defmodule IsabelleClientStatefulTest do
     server =
       spawn(fn ->
         {:ok, socket} = :gen_tcp.accept(listen)
-        {:ok, command} = recv_line(socket)
+        {:ok, command} = IsabelleTestSupport.recv_line(socket)
         send(parent, {:command, command})
 
         :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
@@ -190,11 +268,17 @@ defmodule IsabelleClientStatefulTest do
     assert_receive {:DOWN, ^ref, :process, ^server, _}
   end
 
-  defp recv_line(socket, acc \\ []) do
-    case :gen_tcp.recv(socket, 1, 1_000) do
-      {:ok, "\n"} -> {:ok, IO.iodata_to_binary(acc)}
-      {:ok, byte} -> recv_line(socket, [acc, byte])
-      {:error, reason} -> {:error, reason}
-    end
+  defp assert_example_messages(task) do
+    assert_messages_contain(task, "Sledgehammering", line: 5)
+    assert_messages_contain(task, "theorem ?x = ?x", line: 6)
+    assert_messages_contain(task, "Sledgehammering", line: 9)
+    assert_messages_contain(task, "theorem ?xs @ [] = ?xs", line: 10)
+  end
+
+  defp assert_messages_contain(task, expected, opts \\ []) do
+    assert task
+           |> IsabelleClient.messages(opts)
+           |> Enum.join("\n")
+           |> String.contains?(expected)
   end
 end

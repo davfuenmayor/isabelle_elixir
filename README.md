@@ -11,7 +11,7 @@ the TCP socket, and gives you explicit `command/3`, `async_command/3`, and
 `await_task/3` helpers.
 
 `IsabelleClient` is the default client for scripts and notebooks. It keeps the
-socket and current `session_id` in a struct, and awaits asynchronous Isabelle
+socket and current session in a struct, and awaits asynchronous Isabelle
 tasks for the common session workflow.
 
 `IsabelleClientFull` is a `GenServer` wrapper. It owns the socket, so callers
@@ -70,10 +70,12 @@ IO.puts(Enum.join(IsabelleClient.messages(task), "\n"))
 
 ### Messages And Line Filters
 
-`messages/1` returns the user-facing Isabelle messages as a list of strings.
-Use `diagnostics/1` when you need the raw message maps, including source
-positions. When Isabelle attaches position fields, all result helpers can
-filter by line and by Isabelle symbol offset:
+`messages/1` returns the user-facing Isabelle node messages as a list of
+strings. Use `diagnostics/1` when you need the raw node message maps,
+including source positions. `errors/1` returns Isabelle's cumulative
+top-level errors plus node-level error messages. When Isabelle attaches
+position fields, all result helpers can filter by line and by Isabelle symbol
+offset:
 
 ```elixir
 IsabelleClient.messages(task, line: 5)
@@ -95,6 +97,42 @@ IsabelleClient.start_session(client, session: "HOL")
 IsabelleClient.use_theories(client, theories: ["Example"], master_dir: "/tmp")
 ```
 
+### Typed Results And Sessions
+
+Task results remain raw Isabelle maps for direct access, but common results can
+be decoded into small structs:
+
+```elixir
+session = IsabelleClient.session(start_task)
+typed = IsabelleClient.Result.decode(task)
+```
+
+`session` is an `%IsabelleClient.Session{}`. `use_theories` results decode to
+`%IsabelleClient.Result.UseTheoriesResult{}` with typed nodes, messages,
+positions, and exports.
+
+```elixir
+typed = IsabelleClient.use_theories_result(task)
+nodes = IsabelleClient.nodes(task)
+node = IsabelleClient.node(task, "Draft.Example")
+exports = IsabelleClient.exports(task)
+top_level_errors = IsabelleClient.top_level_errors(task)
+```
+
+Isabelle sessions live in the server independently of a single client
+connection. The stateful clients keep an active session for convenience, but
+you may pass an explicit session id when using or stopping another session:
+
+```elixir
+IsabelleClient.use_theories(client,
+  session_id: session.id,
+  theories: ["Example"],
+  master_dir: "/tmp"
+)
+
+IsabelleClient.stop_session(client, session, 120_000)
+```
+
 ### Checking Files
 
 For existing `.thy` files, `check_file/4` derives the theory name and
@@ -109,7 +147,8 @@ IsabelleClient.messages(task, line: 5)
 
 Use `IsabelleClientFull` when multiple Elixir processes share one Isabelle
 connection. It owns the socket and routes async `NOTE` / `FINISHED` / `FAILED`
-messages by Isabelle task id:
+messages by Isabelle task id. Use `on_event` to receive task lifecycle events,
+including notes:
 
 ```elixir
 {:ok, pid} = IsabelleClientFull.start_link(session: "HOL", timeout: 120_000)
@@ -122,7 +161,7 @@ task =
       pid,
       [theories: ["Example"], master_dir: "/tmp"],
       120_000,
-      on_note: fn note -> send(parent, {:isabelle_note, note}) end
+      on_event: fn event -> send(parent, {:isabelle_event, event}) end
     )
   end)
 

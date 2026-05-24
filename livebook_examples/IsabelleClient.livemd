@@ -1,7 +1,9 @@
 # IsabelleClient
 
+## Section
+
 `IsabelleClient` is the ordinary user-facing client. It keeps the socket and the
-current `session_id` in a struct, awaits Isabelle tasks for you, and adds
+current session in a struct, awaits Isabelle tasks for you, and adds
 helpers for checking text or files.
 
 This notebook shows the ergonomic workflow: start a local `HOL` session, check
@@ -38,6 +40,11 @@ session. `with_session/2` is the same lifecycle wrapped around a function.
 ```
 
 ```elixir
+active_session = IsabelleClient.session(start_task)
+{active_session.id == client.session_id, is_binary(active_session.tmp_dir)}
+```
+
+```elixir
 {:ok, "stateful"} = IsabelleClient.echo(client, "stateful")
 ```
 
@@ -66,7 +73,8 @@ true = text_task.result["ok"]
 Diagnostic maps include source positions. `messages/2`, `diagnostics/2`,
 `errors/2`, and `warnings/2` accept `line: n`, `line: first..last`,
 `line: [n, ...]`, and `offset: n`. The offset is matched against
-`pos.offset..pos.end_offset`.
+`pos.offset..pos.end_offset`. `errors/2` includes Isabelle's cumulative
+top-level errors as well as node-level error diagnostics.
 
 ```elixir
 proof_offsets =
@@ -101,6 +109,41 @@ true =
   text_task
   |> IsabelleClient.messages(line: [6, 10])
   |> Enum.any?(&String.contains?(&1, "theorem"))
+```
+
+```elixir
+typed_text_result = IsabelleClient.Result.decode(text_task)
+typed_node = IsabelleClient.node(text_task, "Draft.LiveTextExample")
+
+%{
+  ok?: typed_text_result.ok,
+  node_count: length(IsabelleClient.nodes(text_task)),
+  node_name: typed_node.node_name,
+  first_message_line: List.first(typed_node.messages).pos.line,
+  exports: IsabelleClient.exports(text_task),
+  top_level_errors: IsabelleClient.top_level_errors(text_task)
+}
+```
+
+## Explicit Sessions
+
+The client remembers one active session, but Isabelle sessions are server
+resources. You may pass an explicit session id when using a different session.
+
+```elixir
+{:ok, client, other_start_task} =
+  IsabelleClient.start_session(client, [session: "HOL"], 120_000)
+
+other_session = IsabelleClient.session(other_start_task)
+
+{:ok, explicit_task} =
+  IsabelleClient.use_theories(
+    client,
+    [session_id: active_session.id, theories: ["LiveTextExample"], master_dir: active_session.tmp_dir],
+    120_000
+  )
+
+{other_session.id == client.session_id, explicit_task.result["ok"]}
 ```
 
 ## Check A File
@@ -156,6 +199,11 @@ scoped_messages
 ```
 
 ## Stop And Shutdown
+
+```elixir
+{:ok, client, first_stop_task} = IsabelleClient.stop_session(client, active_session, 120_000)
+{client.session_id == other_session.id, first_stop_task.status}
+```
 
 ```elixir
 {:ok, client, stop_task} = IsabelleClient.stop_session(client, 120_000)
