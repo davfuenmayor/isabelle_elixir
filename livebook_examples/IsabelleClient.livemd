@@ -1,13 +1,21 @@
 # IsabelleClient
 
-## Section
+## Start Here
 
 `IsabelleClient` is the ordinary user-facing client. It keeps the socket and the
 current session in a struct, awaits Isabelle tasks for you, and adds
 helpers for checking text or files.
 
-This notebook shows the ergonomic workflow: start a local `HOL` session, check
-theory text and a `.thy` file, use `messages/2` line filters, and clean up.
+Start here if you are learning the library. This notebook follows the normal
+workflow: start a local `HOL` session, run ordinary commands, check theory
+text, inspect Isabelle messages, check a `.thy` file, use typed result helpers,
+work with explicit sessions, and clean up.
+
+The other notebooks build on this one:
+
+* `IsabelleClientShared.livemd` is for sharing one connection across many
+  Elixir processes
+* `IsabelleClientRaw.livemd` is for protocol-level control with raw sockets
 
 ## Setup
 
@@ -46,6 +54,29 @@ active_session = IsabelleClient.session(start_task)
 
 ```elixir
 {:ok, "stateful"} = IsabelleClient.echo(client, "stateful")
+```
+
+```elixir
+{:ok, commands} = IsabelleClient.help(client)
+
+{:ok, echoed} =
+  IsabelleClient.command(client, "echo", %{
+    client: "stateful",
+    command: "generic command/4"
+  })
+
+%{
+  has_session_start?: "session_start" in commands,
+  echoed: echoed
+}
+```
+
+`build_session/3` is usually only needed when you want to build an Isabelle
+image explicitly. `start/1` already started `HOL` above.
+
+```elixir
+{:ok, build_task} = IsabelleClient.build_session(client, [session: "HOL"], 120_000)
+{build_task.status, build_task.result["ok"]}
 ```
 
 ## Check Text
@@ -125,6 +156,33 @@ typed_node = IsabelleClient.node(text_task, "Draft.LiveTextExample")
 }
 ```
 
+The same result helpers work for failed tasks. `errors/2` combines Isabelle's
+top-level errors with node-level error diagnostics.
+
+```elixir
+bad_result =
+  IsabelleClient.check_text(
+    client,
+    "BrokenExample",
+    "lemma \"x = y\"\n  by simp",
+    [],
+    120_000
+  )
+
+bad_task =
+  case bad_result do
+    {:ok, task} -> task
+    {:error, task} -> task
+  end
+
+%{
+  status: bad_task.status,
+  ok?: get_in(bad_task.result, ["ok"]),
+  errors: IsabelleClient.errors(bad_task),
+  diagnostics: IsabelleClient.diagnostics(bad_task)
+}
+```
+
 ## Explicit Sessions
 
 The client remembers one active session, but Isabelle sessions are server
@@ -144,6 +202,16 @@ other_session = IsabelleClient.session(other_start_task)
   )
 
 {other_session.id == client.session_id, explicit_task.result["ok"]}
+```
+
+Session-start results can be read either as raw maps or typed session structs.
+
+```elixir
+%{
+  active_session_id: client.session_id,
+  extracted_from_task: IsabelleClient.extract_session(other_start_task),
+  typed_session: other_session
+}
 ```
 
 ## Check A File
@@ -184,7 +252,20 @@ end
 }
 ```
 
+```elixir
+{:ok, purge_result} =
+  IsabelleClient.purge_theories(client,
+    theories: ["LiveFileExample"],
+    master_dir: theory_dir
+  )
+
+{purge_result["purged"], purge_result["retained"]}
+```
+
 ## Scoped Sessions
+
+`with_session/2` is the shortest safe shape for scripts: it starts a local
+server/session, passes the client to your function, then stops and shuts down.
 
 ```elixir
 {:ok, scoped_messages} =
@@ -213,5 +294,5 @@ scoped_messages
 ```elixir
 {:ok, nil} = IsabelleClient.shutdown_server(client)
 :ok = IsabelleClient.close(client)
-IsabelleClientMini.kill_server(client.server_name)
+IsabelleClient.kill_server(client.server_name)
 ```

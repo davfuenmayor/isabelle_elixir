@@ -1,4 +1,4 @@
-defmodule IsabelleClientFull do
+defmodule IsabelleClient.Shared do
   @moduledoc """
   GenServer-backed Isabelle client.
 
@@ -132,7 +132,7 @@ defmodule IsabelleClientFull do
   def terminate(_reason, %__MODULE__{client: client, reader: reader}) do
     if reader, do: Process.exit(reader, :normal)
     IsabelleClient.close(client)
-    if client.server_name, do: IsabelleClientMini.kill_server(client.server_name)
+    if client.server_name, do: IsabelleClient.kill_server(client.server_name)
   end
 
   @impl true
@@ -179,10 +179,7 @@ defmodule IsabelleClientFull do
 
   def handle_call({:purge_theories, args, timeout}, from, state) do
     with_session_args(state, args, fn %{client: client} = state ->
-      {:ok, args} =
-        args
-        |> Arguments.normalize()
-        |> Session.put_id(client.session_id)
+      {:ok, args} = Session.put_id(args, client.session_id)
 
       enqueue_command(state, from, "purge_theories", args, {:sync, timeout})
     end)
@@ -191,19 +188,7 @@ defmodule IsabelleClientFull do
   def handle_call({:check_text, theory, text, opts, timeout}, from, state) do
     with_session_args(state, opts, fn %{client: client} = state ->
       opts = Arguments.normalize(opts)
-      master_dir = Map.get(opts, "master_dir") || Session.default_master_dir(client, opts)
-      File.mkdir_p!(master_dir)
-
-      File.write!(
-        Path.join(master_dir, Theory.file(theory)),
-        Theory.source(theory, text, Map.get(opts, "imports", "Main"))
-      )
-
-      args =
-        opts
-        |> Map.delete("imports")
-        |> Map.put_new("master_dir", master_dir)
-        |> Map.put_new("theories", [theory])
+      args = Theory.write_args(theory, text, opts, default_master_dir(client, opts))
 
       enqueue_async(state, from, :use_theories, args, timeout, [])
     end)
@@ -365,8 +350,10 @@ defmodule IsabelleClientFull do
 
   defp with_session_args(state, _args, fun), do: fun.(state)
 
-  defp maybe_session_id(args, session_id, :use_theories),
-    do: args |> Session.put_id(session_id) |> elem(1)
+  defp maybe_session_id(args, session_id, :use_theories) do
+    {:ok, args} = Session.put_id(args, session_id)
+    args
+  end
 
   defp maybe_session_id(args, _session_id, _action), do: args
 
@@ -378,6 +365,9 @@ defmodule IsabelleClientFull do
 
   defp normalize_arg(nil), do: nil
   defp normalize_arg(arg), do: Arguments.normalize(arg)
+
+  defp default_master_dir(client, opts),
+    do: Map.get(opts, "master_dir") || Session.default_master_dir(client, opts)
 
   defp command_timer({:sync, timeout}, ref), do: timer({:command_timeout, ref}, timeout)
 

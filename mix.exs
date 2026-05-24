@@ -32,9 +32,9 @@ defmodule Isabelle.MixProject do
         main: "readme",
         extras: [
           "README.md",
-          "livebook_examples/IsabelleClientMini.livemd",
           "livebook_examples/IsabelleClient.livemd",
-          "livebook_examples/IsabelleClientFull.livemd"
+          "livebook_examples/IsabelleClientShared.livemd",
+          "livebook_examples/IsabelleClientRaw.livemd"
         ],
         groups_for_extras: [
           Tutorials: ~r/livebook_examples\/.*/

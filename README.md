@@ -6,15 +6,13 @@ The library speaks Isabelle's server protocol directly. See Chapter 4 in the [Is
 
 ## Clients
 
-`IsabelleClientMini` is the low-level building block. It is stateless, exposes
-the TCP socket, and gives you explicit `command/3`, `async_command/3`, and
-`await_task/3` helpers.
+`IsabelleClient` supports two workflows. The raw-socket workflow is stateless:
+it exposes the TCP socket and gives you explicit `command/3`,
+`async_command/3`, and `await_task/3` helpers. The stateful workflow keeps the
+socket and current session in a struct, and awaits asynchronous Isabelle tasks
+for common session operations.
 
-`IsabelleClient` is the default client for scripts and notebooks. It keeps the
-socket and current session in a struct, and awaits asynchronous Isabelle
-tasks for the common session workflow.
-
-`IsabelleClientFull` is a `GenServer` wrapper. It owns the socket, so callers
+`IsabelleClient.Shared` is a `GenServer` wrapper. It owns the socket, so callers
 may safely share it across processes while concurrent Isabelle tasks are routed
 back to the right caller by task id.
 
@@ -23,17 +21,18 @@ back to the right caller by task id.
 The notebooks in `livebook_examples/` are intended to be read and run in this
 order:
 
-1. `IsabelleClientMini.livemd` introduces the wire-level building blocks and
-   explicit task handling.
-2. `IsabelleClient.livemd` shows the default stateful client for ordinary use.
-3. `IsabelleClientFull.livemd` shows the process-owning client and why it is
+1. `IsabelleClient.livemd` shows the default stateful client for ordinary use:
+   start `HOL`, check theory text, inspect messages, and clean up.
+2. `IsabelleClientShared.livemd` shows the process-owning client and why it is
    the right choice when multiple Elixir processes share one Isabelle
    connection.
+3. `IsabelleClientRaw.livemd` introduces the raw-socket building blocks,
+   protocol commands, and explicit task handling.
 
 Together they serve as the tutorial for the library. They start local Isabelle
 servers, run smoke tests, build and start a `HOL` session, check theories,
-purge, stop, and clean up. The "Full" notebook additionally demonstrates
-concurrency-safe access.
+purge, stop, and clean up. The default notebook is the best starting point;
+the Shared and Raw notebooks are for concurrency and protocol-level control.
 
 ## Setup
 
@@ -145,19 +144,19 @@ IsabelleClient.messages(task, line: 5)
 
 ### Shared Clients
 
-Use `IsabelleClientFull` when multiple Elixir processes share one Isabelle
+Use `IsabelleClient.Shared` when multiple Elixir processes share one Isabelle
 connection. It owns the socket and routes async `NOTE` / `FINISHED` / `FAILED`
 messages by Isabelle task id. Use `on_event` to receive task lifecycle events,
 including notes:
 
 ```elixir
-{:ok, pid} = IsabelleClientFull.start_link(session: "HOL", timeout: 120_000)
+{:ok, pid} = IsabelleClient.Shared.start_link(session: "HOL", timeout: 120_000)
 
 parent = self()
 
 task =
   Task.async(fn ->
-    IsabelleClientFull.use_theories(
+    IsabelleClient.Shared.use_theories(
       pid,
       [theories: ["Example"], master_dir: "/tmp"],
       120_000,

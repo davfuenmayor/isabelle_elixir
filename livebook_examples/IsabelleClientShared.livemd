@@ -1,12 +1,16 @@
-# IsabelleClientFull
+# IsabelleClient.Shared
 
-## Section
+## Shared Connections
 
-`IsabelleClientFull` is the process-owning client. It wraps the stateful client
+`IsabelleClient.Shared` is the process-owning client. It wraps the stateful client
 in a `GenServer`, so many Elixir processes can share one Isabelle connection
 without racing on socket reads.
 
-The Full client does two different kinds of coordination:
+Read `IsabelleClient.livemd` first if you are new to the library. This notebook
+focuses on the extra coordination needed once multiple Elixir processes use one
+Isabelle connection.
+
+The Shared client does two different kinds of coordination:
 
 * synchronous command replies are read by one owner process and returned to the
   caller in command-stream order
@@ -42,13 +46,24 @@ The returned `pid` is the shared client handle.
 
 ```elixir
 {:ok, pid} =
-  IsabelleClientFull.start_link(
+  IsabelleClient.Shared.start_link(
     session: "HOL",
-    server_name: "livebook_full_#{System.unique_integer([:positive])}",
+    server_name: "livebook_shared_#{System.unique_integer([:positive])}",
     timeout: 120_000
   )
 
 Process.alive?(pid)
+```
+
+```elixir
+{:ok, commands} = IsabelleClient.Shared.help(pid)
+{:ok, %{"client" => "shared-start"} = started_echo} =
+  IsabelleClient.Shared.echo(pid, %{client: "shared-start"})
+
+%{
+  has_use_theories?: "use_theories" in commands,
+  echoed: started_echo
+}
 ```
 
 ## Concurrent Synchronous Commands
@@ -66,12 +81,12 @@ sync_tasks =
     Task.async(fn ->
       case operation do
         {:echo, n} ->
-          payload = %{client: "full", n: n, framed: String.duplicate("#{n}", 120)}
-          {:ok, echoed} = IsabelleClientFull.echo(pid, payload)
+          payload = %{client: "shared", n: n, framed: String.duplicate("#{n}", 120)}
+          {:ok, echoed} = IsabelleClient.Shared.echo(pid, payload)
           {:echo, echoed["n"]}
 
         {:help, n} ->
-          {:ok, commands} = IsabelleClientFull.help(pid)
+          {:ok, commands} = IsabelleClient.Shared.help(pid)
           true = "use_theories" in commands
           {:help, n}
       end
@@ -80,6 +95,26 @@ sync_tasks =
 
 sync_results = Task.await_many(sync_tasks, 30_000)
 Enum.sort(sync_results) == Enum.sort(operations)
+```
+
+## More Than One Session
+
+The shared process keeps one active session, but Isabelle sessions are still
+server resources. You can start additional sessions and route work to a specific
+one with `session_id:`.
+
+```elixir
+{:ok, first_start_task} = IsabelleClient.Shared.start_session(pid, [session: "HOL"], 120_000)
+{:ok, second_start_task} = IsabelleClient.Shared.start_session(pid, [session: "HOL"], 120_000)
+
+first_session = IsabelleClient.session(first_start_task)
+second_session = IsabelleClient.session(second_start_task)
+
+%{
+  first_session: first_session.id,
+  second_session: second_session.id,
+  different?: first_session.id != second_session.id
+}
 ```
 
 ## Concurrent Theory Tasks
@@ -99,16 +134,18 @@ event_ref = make_ref()
 done_ref = make_ref()
 
 theory_dir =
-  Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_full_#{System.unique_integer([:positive])}")
+  Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_shared_#{System.unique_integer([:positive])}")
 
 File.mkdir_p!(theory_dir)
 
 theories = [
-  {"FullExample1", "lemma \"x = x\"\n  by simp", "theorem ?x = ?x"},
-  {"FullExample2", "lemma \"xs @ [] = xs\"\n  by simp", "theorem ?xs @ [] = ?xs"},
-  {"FullExample3", "lemma \"(A \\<longrightarrow> A) \\<and> True\"\n  by simp",
+  {"SharedExample1", "lemma \"x = x\"\n  by simp", "theorem ?x = ?x"},
+  {"SharedExample2", "lemma \"xs @ [] = xs\"\n  by simp", "theorem ?xs @ [] = ?xs"},
+  {"SharedExample3", "lemma \"(A \\<longrightarrow> A) \\<and> True\"\n  by simp",
    "theorem (?A \\<longrightarrow> ?A) \\<and> True"}
 ]
+
+session_ids = [first_session.id, second_session.id, second_session.id]
 
 for {theory, body, _expected} <- theories do
   File.write!(Path.join(theory_dir, "#{theory}.thy"), """
@@ -125,17 +162,18 @@ end
 ```elixir
 theory_tasks =
   theories
+  |> Enum.zip(session_ids)
   |> Enum.shuffle()
-  |> Enum.map(fn {theory, _body, expected_message} ->
+  |> Enum.map(fn {{theory, _body, expected_message}, session_id} ->
     Task.async(fn ->
       on_event = fn event ->
-        send(parent, {:full_event, event_ref, theory, event.type, event.task, event.body})
+        send(parent, {:shared_event, event_ref, theory, event.type, event.task, event.body})
       end
 
       {:ok, task} =
-        IsabelleClientFull.use_theories(
+        IsabelleClient.Shared.use_theories(
           pid,
-          [theories: [theory], master_dir: theory_dir],
+          [session_id: session_id, theories: [theory], master_dir: theory_dir],
           120_000,
           on_event: on_event
         )
@@ -145,7 +183,7 @@ theory_tasks =
       true = Enum.any?(messages, &String.contains?(&1, expected_message))
 
       result = %{theory: theory, task_id: task.id, messages: messages}
-      send(parent, {:full_done, done_ref, result})
+      send(parent, {:shared_done, done_ref, result})
       result
     end)
   end)
@@ -153,7 +191,7 @@ theory_tasks =
 completion_order =
   for _ <- theory_tasks do
     receive do
-      {:full_done, ^done_ref, result} -> result.theory
+      {:shared_done, ^done_ref, result} -> result.theory
     after
       120_000 -> raise "timed out waiting for theory result"
     end
@@ -164,7 +202,7 @@ theory_results = Task.await_many(theory_tasks, 1_000)
 events =
   Stream.repeatedly(fn ->
     receive do
-      {:full_event, ^event_ref, theory, type, task_id, body} -> {theory, type, task_id, body}
+      {:shared_event, ^event_ref, theory, type, task_id, body} -> {theory, type, task_id, body}
     after
       100 -> :done
     end
@@ -176,8 +214,8 @@ results_by_theory = Map.new(theory_results, &{&1.theory, &1})
 notes = Enum.filter(events, fn {_theory, type, _task_id, _body} -> type == :note end)
 notes_by_theory = Enum.group_by(notes, fn {theory, _type, _task_id, _body} -> theory end)
 
-true = Map.keys(results_by_theory) |> Enum.sort() == ~w(FullExample1 FullExample2 FullExample3)
-true = Map.keys(notes_by_theory) |> Enum.sort() == ~w(FullExample1 FullExample2 FullExample3)
+true = Map.keys(results_by_theory) |> Enum.sort() == ~w(SharedExample1 SharedExample2 SharedExample3)
+true = Map.keys(notes_by_theory) |> Enum.sort() == ~w(SharedExample1 SharedExample2 SharedExample3)
 
 true =
   Enum.all?(notes, fn {theory, _type, task_id, _body} ->
@@ -195,14 +233,14 @@ true =
 
 ## Check Text Helper
 
-`check_text/5` is available on Full too. Use it when you do not need custom
+`check_text/5` is available on Shared too. Use it when you do not need custom
 task callbacks.
 
 ```elixir
 {:ok, inline_task} =
-  IsabelleClientFull.check_text(
+  IsabelleClient.Shared.check_text(
     pid,
-    "FullInlineExample",
+    "SharedInlineExample",
     "lemma \"x = x\"\n  by simp",
     [],
     120_000
@@ -211,9 +249,74 @@ task callbacks.
 IsabelleClient.messages(inline_task)
 ```
 
+`check_file/5` accepts the same explicit `session_id:` argument as
+`use_theories/4`.
+
+```elixir
+{:ok, file_task} =
+  IsabelleClient.Shared.check_file(
+    pid,
+    Path.join(theory_dir, "SharedExample1.thy"),
+    [session_id: first_session.id],
+    120_000
+  )
+
+%{
+  ok?: file_task.result["ok"],
+  messages: IsabelleClient.messages(file_task, line: 5..6)
+}
+```
+
+Failed tasks also go through the same event callback.
+
+```elixir
+File.write!(Path.join(theory_dir, "SharedBrokenExample.thy"), """
+theory SharedBrokenExample imports Main
+begin
+
+lemma "x = y"
+  by simp
+
+end
+""")
+
+failure_ref = make_ref()
+
+failure_result =
+  IsabelleClient.Shared.use_theories(
+    pid,
+    [theories: ["SharedBrokenExample"], master_dir: theory_dir],
+    120_000,
+    on_event: fn event -> send(parent, {:shared_failure_event, failure_ref, event}) end
+  )
+
+failed_task =
+  case failure_result do
+    {:ok, task} -> task
+    {:error, task} -> task
+  end
+
+failure_events =
+  Stream.repeatedly(fn ->
+    receive do
+      {:shared_failure_event, ^failure_ref, event} -> event.type
+    after
+      100 -> :done
+    end
+  end)
+  |> Enum.take_while(&(&1 != :done))
+
+%{
+  status: failed_task.status,
+  ok?: get_in(failed_task.result, ["ok"]),
+  event_types: failure_events,
+  errors: IsabelleClient.errors(failed_task)
+}
+```
+
 ```elixir
 {:ok, purge_result} =
-  IsabelleClientFull.purge_theories(pid,
+  IsabelleClient.Shared.purge_theories(pid,
     theories: Enum.map(theories, fn {theory, _body, _expected} -> theory end),
     master_dir: theory_dir
   )
@@ -224,11 +327,13 @@ IsabelleClient.messages(inline_task)
 ## Stop And Shutdown
 
 ```elixir
-{:ok, stop_task} = IsabelleClientFull.stop_session(pid, 120_000)
-stop_task.status
+{:ok, first_stop_task} = IsabelleClient.Shared.stop_session(pid, first_session, 120_000)
+{:ok, active_stop_task} = IsabelleClient.Shared.stop_session(pid, 120_000)
+
+{first_stop_task.status, active_stop_task.status}
 ```
 
 ```elixir
-{:ok, nil} = IsabelleClientFull.shutdown_server(pid)
-:ok = IsabelleClientFull.close(pid)
+{:ok, nil} = IsabelleClient.Shared.shutdown_server(pid)
+:ok = IsabelleClient.Shared.close(pid)
 ```

@@ -30,19 +30,19 @@ defmodule IsabelleClient.Session do
   def id(%__MODULE__{id: id}), do: id
   def id(id) when is_binary(id), do: id
 
-  def put_id(%{"session_id" => session_id} = args, _active_id) when is_binary(session_id),
+  def put_id(args, active_id),
+    do: args |> IsabelleClient.Arguments.normalize() |> do_put_id(active_id)
+
+  defp do_put_id(%{"session_id" => session_id} = args, _active_id) when is_binary(session_id),
     do: {:ok, args}
 
-  def put_id(args, active_id) when is_binary(active_id),
+  defp do_put_id(args, active_id) when is_binary(active_id),
     do: {:ok, Map.put(args, "session_id", active_id)}
 
-  def put_id(_args, _active_id), do: :error
+  defp do_put_id(_args, _active_id), do: :error
 
   def has_id?(args) do
-    args
-    |> IsabelleClient.Arguments.normalize()
-    |> Map.get("session_id")
-    |> is_binary()
+    match?({:ok, _}, put_id(args, nil))
   end
 
   def clear_active(client, nil), do: clear(client)

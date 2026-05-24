@@ -21,12 +21,12 @@ defmodule IsabelleTestSupport do
   def with_server(test, fun) do
     if isabelle_available?() do
       name = "elixir_test_#{test}_#{System.unique_integer([:positive])}"
-      {:ok, [server]} = IsabelleClientMini.new_server(name, 0)
+      {:ok, [server]} = IsabelleClient.new_server(name, 0)
 
       try do
         fun.(server)
       after
-        IsabelleClientMini.kill_server(name)
+        IsabelleClient.kill_server(name)
       end
     else
       flunk("isabelle executable not found; set ISABELLE_TOOL or add isabelle to PATH")
@@ -34,11 +34,7 @@ defmodule IsabelleTestSupport do
   end
 
   def theory_dir(name, theorem \\ ~s(theorem "x = x"\n  by simp)) do
-    dir =
-      Path.join(
-        System.tmp_dir!(),
-        "isabelle_elixir_#{name}_#{System.unique_integer([:positive])}"
-      )
+    dir = tmp_dir(name)
 
     File.mkdir_p!(dir)
 
@@ -50,6 +46,28 @@ defmodule IsabelleTestSupport do
 
     end
     """)
+
+    dir
+  end
+
+  def theory_set_dir(name, theories) do
+    dir = tmp_dir(name)
+    File.mkdir_p!(dir)
+    write_theories!(dir, theories)
+    dir
+  end
+
+  def write_theories!(dir, theories) do
+    for {theory, body, _expected} <- theories do
+      File.write!(Path.join(dir, "#{theory}.thy"), """
+      theory #{theory} imports Main
+      begin
+
+      #{body}
+
+      end
+      """)
+    end
 
     dir
   end
@@ -67,5 +85,9 @@ defmodule IsabelleTestSupport do
       {:ok, byte} -> recv_line(socket, [acc, byte])
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp tmp_dir(name) do
+    Path.join(System.tmp_dir!(), "isabelle_elixir_#{name}_#{System.unique_integer([:positive])}")
   end
 end

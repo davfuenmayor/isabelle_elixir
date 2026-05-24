@@ -10,6 +10,7 @@ defmodule IsabelleProtocolTest do
   alias IsabelleClient.Server
   alias IsabelleClient.Server.Info
   alias IsabelleClient.Task
+  alias IsabelleClient.Theory
 
   test "encodes short and long Isabelle line messages" do
     assert IO.iodata_to_binary(Protocol.command("help")) == "help\n"
@@ -252,7 +253,7 @@ defmodule IsabelleProtocolTest do
     assert Result.extract_session(task) == "session-123"
     assert Result.extract_session(%Session{id: "session-123"}) == "session-123"
     assert IsabelleClient.extract_session(task) == "session-123"
-    assert IsabelleClientMini.extract_session(%{"session_id" => "session-123"}) == "session-123"
+    assert IsabelleClient.extract_session(%{"session_id" => "session-123"}) == "session-123"
     assert %Session{} = session = Result.decode(task)
     assert session == %Session{id: "session-123", tmp_dir: nil}
     assert session["session_id"] == "session-123"
@@ -272,5 +273,26 @@ defmodule IsabelleProtocolTest do
              "options" => %{"threads" => 4},
              "nested" => [%{"print_mode" => ["ASCII"]}]
            }
+
+    assert Session.put_id([session_id: "explicit"], "active") ==
+             {:ok, %{"session_id" => "explicit"}}
+
+    assert Session.put_id([], "active") == {:ok, %{"session_id" => "active"}}
+    assert Session.put_id([], nil) == :error
+  end
+
+  test "prepares theory files and use_theories arguments" do
+    dir =
+      Path.join(System.tmp_dir!(), "isabelle_elixir_theory_#{System.unique_integer([:positive])}")
+
+    assert Theory.write_args(
+             "Scratch.Example",
+             "lemma \"x = x\"\n  by simp",
+             [imports: "Main"],
+             dir
+           ) ==
+             %{"master_dir" => dir, "theories" => ["Scratch.Example"]}
+
+    assert File.read!(Path.join(dir, "Example.thy")) =~ "theory Scratch.Example imports Main"
   end
 end

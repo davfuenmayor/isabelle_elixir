@@ -180,19 +180,10 @@ defmodule IsabelleClient.Result do
 
   def errors(%Task{result: result}, opts), do: errors(result, opts)
 
-  def errors(%UseTheoriesResult{} = result, opts) do
-    result.errors
-    |> Kernel.++(diagnostics(result) |> Enum.filter(&(message_kind(&1) == "error")))
-    |> filter_diagnostics(opts)
-    |> message_texts()
-  end
+  def errors(%UseTheoriesResult{} = result, opts),
+    do: result |> error_diagnostics() |> format(opts)
 
-  def errors(%{} = result, opts) do
-    (Map.get(result, "errors", []) || [])
-    |> Kernel.++(diagnostics(result) |> Enum.filter(&(message_kind(&1) == "error")))
-    |> filter_diagnostics(opts)
-    |> message_texts()
-  end
+  def errors(%{} = result, opts), do: result |> error_diagnostics() |> format(opts)
 
   def errors(_result, _opts), do: []
 
@@ -205,6 +196,15 @@ defmodule IsabelleClient.Result do
     |> Enum.filter(&(message_kind(&1) == kind))
     |> message_texts()
   end
+
+  defp error_diagnostics(%UseTheoriesResult{} = result), do: result.errors ++ node_errors(result)
+
+  defp error_diagnostics(%{} = result),
+    do: (Map.get(result, "errors", []) || []) ++ node_errors(result)
+
+  defp node_errors(result), do: Enum.filter(diagnostics(result), &(message_kind(&1) == "error"))
+
+  defp format(diagnostics, opts), do: diagnostics |> filter_diagnostics(opts) |> message_texts()
 
   defp diagnostics_from_nodes(nodes, opts) do
     nodes
