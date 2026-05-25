@@ -1,8 +1,8 @@
-# IsabelleClient Raw
+# IsabelleClient.Raw
 
 ## Protocol-Level Client
 
-This notebook uses the raw-socket side of `IsabelleClient`. It exposes the TCP
+This notebook uses `IsabelleClient.Raw`. It exposes the TCP
 socket, keeps no session state, and leaves async task waiting explicit.
 
 Read `IsabelleClient.livemd` first if you are new to the library. The raw API is
@@ -30,29 +30,24 @@ Passing port `0` asks Isabelle to choose a free local port.
 
 ```elixir
 server_name = "livebook_raw_#{System.unique_integer([:positive])}"
-{:ok, [server]} = IsabelleClient.new_server(server_name, 0)
-{:ok, socket} = IsabelleClient.connect_socket(server["password"], server["host"], server["port"])
+{:ok, [server]} = IsabelleClient.Raw.new_server(server_name, 0)
+{:ok, socket} = IsabelleClient.Raw.connect(server["password"], server["host"], server["port"])
 ```
 
 ```elixir
-{:ok, servers} = IsabelleClient.list_servers()
-
-%{
-  listed?: Enum.any?(servers, &(&1["name"] == server_name)),
-  server_host: server[:host],
-  server_port: server["port"]
-}
+{:ok, servers} = IsabelleClient.Raw.list_servers()
+servers
 ```
 
 ## Synchronous Commands
 
 ```elixir
-{:ok, commands} = IsabelleClient.help(socket)
+{:ok, commands} = IsabelleClient.Raw.help(socket)
 
 payload = %{client: "raw", framed: String.duplicate("x", 120)}
-{:ok, %{"client" => "raw", "framed" => framed}} = IsabelleClient.echo(socket, payload)
+{:ok, %{"client" => "raw", "framed" => framed}} = IsabelleClient.Raw.echo(socket, payload)
 
-{:ok, %{"via" => "command/4"}} = IsabelleClient.command(socket, "echo", %{via: "command/4"})
+{:ok, %{"via" => "command/4"}} = IsabelleClient.Raw.command(socket, "echo", %{via: "command/4"})
 
 %{
   has_use_theories?: "use_theories" in commands,
@@ -65,7 +60,7 @@ payload = %{client: "raw", framed: String.duplicate("x", 120)}
 unknown task is harmless on the Isabelle side.
 
 ```elixir
-{:ok, nil} = IsabelleClient.cancel_task(socket, "00000000-0000-0000-0000-000000000000")
+{:ok, nil} = IsabelleClient.Raw.cancel_task(socket, "00000000-0000-0000-0000-000000000000")
 ```
 
 ## Session Tasks
@@ -75,8 +70,8 @@ returns that task id as an `%IsabelleClient.Task{}` and leaves `await_task/3`
 explicit.
 
 ```elixir
-{:ok, build_task} = IsabelleClient.async_command(socket, "session_build", session: "HOL")
-{:ok, build_task} = IsabelleClient.await_task(socket, build_task, 120_000)
+{:ok, build_task} = IsabelleClient.Raw.async_command(socket, "session_build", session: "HOL")
+{:ok, build_task} = IsabelleClient.Raw.await_task(socket, build_task, 120_000)
 
 {build_task.status, build_task.result["ok"], length(build_task.notes)}
 ```
@@ -85,8 +80,8 @@ Dedicated helpers such as `start_session/3` and `use_theories/3` are thin
 wrappers around `async_command/4`.
 
 ```elixir
-{:ok, start_task} = IsabelleClient.start_session(socket, session: "HOL")
-{:ok, start_task} = IsabelleClient.poll_status(socket, start_task, 120_000)
+{:ok, start_task} = IsabelleClient.Raw.start_session(socket, session: "HOL")
+{:ok, start_task} = IsabelleClient.Raw.poll_status(socket, start_task, 120_000)
 
 session_id = IsabelleClient.extract_session(start_task)
 {start_task.status, is_binary(session_id)}
@@ -121,13 +116,13 @@ end
 
 ```elixir
 {:ok, use_task} =
-  IsabelleClient.use_theories(socket,
+  IsabelleClient.Raw.use_theories(socket,
     session_id: session_id,
     theories: ["RawExample"],
     master_dir: theory_dir
   )
 
-{:ok, use_task} = IsabelleClient.await_task(socket, use_task, 120_000)
+{:ok, use_task} = IsabelleClient.Raw.await_task(socket, use_task, 120_000)
 true = use_task.result["ok"]
 ```
 
@@ -166,13 +161,13 @@ end
 """)
 
 {:ok, failed_task} =
-  IsabelleClient.use_theories(socket,
+  IsabelleClient.Raw.use_theories(socket,
     session_id: session_id,
     theories: ["RawBroken"],
     master_dir: theory_dir
   )
 
-failure_result = IsabelleClient.await_task(socket, failed_task, 120_000)
+failure_result = IsabelleClient.Raw.await_task(socket, failed_task, 120_000)
 
 failed_task =
   case failure_result do
@@ -189,7 +184,7 @@ failed_task =
 
 ```elixir
 {:ok, purge_result} =
-  IsabelleClient.purge_theories(socket,
+  IsabelleClient.Raw.purge_theories(socket,
     session_id: session_id,
     theories: ["RawExample", "RawBroken"],
     master_dir: theory_dir
@@ -201,13 +196,13 @@ failed_task =
 ## Stop And Shutdown
 
 ```elixir
-{:ok, stop_task} = IsabelleClient.stop_session(socket, session_id)
-{:ok, stop_task} = IsabelleClient.await_task(socket, stop_task, 120_000)
+{:ok, stop_task} = IsabelleClient.Raw.stop_session(socket, session_id)
+{:ok, stop_task} = IsabelleClient.Raw.await_task(socket, stop_task, 120_000)
 stop_task.status
 ```
 
 ```elixir
-{:ok, nil} = IsabelleClient.shutdown_server(socket)
-:ok = IsabelleClient.close(socket)
-IsabelleClient.kill_server(server_name)
+{:ok, nil} = IsabelleClient.Raw.shutdown_server(socket)
+:ok = IsabelleClient.Raw.close(socket)
+IsabelleClient.Raw.kill_server(server_name)
 ```

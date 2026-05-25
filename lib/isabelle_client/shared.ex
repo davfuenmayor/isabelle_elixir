@@ -11,6 +11,7 @@ defmodule IsabelleClient.Shared do
   alias IsabelleClient.Arguments
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
+  alias IsabelleClient.Raw
   alias IsabelleClient.Session
   alias IsabelleClient.Task
   alias IsabelleClient.Theory
@@ -103,6 +104,7 @@ defmodule IsabelleClient.Shared do
 
   By default this uses the active client session. Pass `"session_id"` or
   `:session_id` in the arguments to use another server session explicitly.
+  Accepts the same async task options as `build_session/4`.
   """
   def check_file(server, path, args \\ [], timeout \\ :infinity, opts \\ []) do
     use_theories(server, Theory.file_args(path, args), timeout, opts)
@@ -132,7 +134,7 @@ defmodule IsabelleClient.Shared do
   def terminate(_reason, %__MODULE__{client: client, reader: reader}) do
     if reader, do: Process.exit(reader, :normal)
     IsabelleClient.close(client)
-    if client.server_name, do: IsabelleClient.kill_server(client.server_name)
+    if client.server_name, do: Raw.kill_server(client.server_name)
   end
 
   @impl true

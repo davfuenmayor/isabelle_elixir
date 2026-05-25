@@ -20,6 +20,7 @@ defmodule IsabelleClient.Session do
 
   def from_result(_), do: nil
 
+  @doc false
   def args(opts) do
     opts
     |> Keyword.get(:session_args, [])
@@ -27,9 +28,11 @@ defmodule IsabelleClient.Session do
     |> Map.put_new("session", Keyword.get(opts, :session, "HOL"))
   end
 
+  @doc "Returns the session id from a session struct or id string."
   def id(%__MODULE__{id: id}), do: id
   def id(id) when is_binary(id), do: id
 
+  @doc false
   def put_id(args, active_id),
     do: args |> IsabelleClient.Arguments.normalize() |> do_put_id(active_id)
 
@@ -41,16 +44,19 @@ defmodule IsabelleClient.Session do
 
   defp do_put_id(_args, _active_id), do: :error
 
+  @doc false
   def has_id?(args) do
     match?({:ok, _}, put_id(args, nil))
   end
 
+  @doc false
   def clear_active(client, nil), do: clear(client)
 
   def clear_active(%{session_id: session_id} = client, session_id), do: clear(client)
 
   def clear_active(client, _session_id), do: client
 
+  @doc false
   def default_master_dir(%{session_id: session_id, tmp_dir: tmp_dir}, %{
         "session_id" => session_id
       })
@@ -63,6 +69,7 @@ defmodule IsabelleClient.Session do
 
   def default_master_dir(_client, _args), do: fresh_tmp_dir()
 
+  @doc false
   def fetch(%__MODULE__{id: id}, key) when key in [:id, :session_id, "id", "session_id"],
     do: {:ok, id}
 

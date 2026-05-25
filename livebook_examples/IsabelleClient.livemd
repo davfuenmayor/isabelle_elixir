@@ -44,12 +44,12 @@ session. `with_session/2` is the same lifecycle wrapped around a function.
     timeout: 120_000
   )
 
-{is_binary(client.session_id), start_task.status}
+{client.session_id, start_task.status}
 ```
 
 ```elixir
 active_session = IsabelleClient.session(start_task)
-{active_session.id == client.session_id, is_binary(active_session.tmp_dir)}
+{active_session.id == client.session_id, active_session.tmp_dir}
 ```
 
 ```elixir
@@ -108,38 +108,16 @@ Diagnostic maps include source positions. `messages/2`, `diagnostics/2`,
 top-level errors as well as node-level error diagnostics.
 
 ```elixir
-proof_offsets =
-  for line <- [6, 10],
-      diagnostic <- IsabelleClient.diagnostics(text_task, line: line),
-      offset = get_in(diagnostic, ["pos", "offset"]),
-      is_integer(offset) do
-    {line, offset}
-  end
-
-%{
-  all_messages: IsabelleClient.messages(text_task),
-  first_sledgehammer_command: IsabelleClient.messages(text_task, line: 5),
-  first_proof_command: IsabelleClient.messages(text_task, line: 6),
-  both_sledgehammer_commands: IsabelleClient.messages(text_task, line: [5, 9]),
-  raw_diagnostics_on_proofs: IsabelleClient.diagnostics(text_task, line: 6..10),
-  proof_offsets: proof_offsets,
-  proof_messages_by_line_and_offset:
-    for {line, offset} <- proof_offsets do
-      {line, offset, IsabelleClient.messages(text_task, line: line, offset: offset)}
-    end
-}
+IsabelleClient.diagnostics(text_task, line: 6..10)
 ```
 
 ```elixir
-true =
-  text_task
-  |> IsabelleClient.messages(line: [5, 9])
-  |> Enum.any?(&String.contains?(&1, "Sledgehammer"))
-
-true =
-  text_task
-  |> IsabelleClient.messages(line: [6, 10])
-  |> Enum.any?(&String.contains?(&1, "theorem"))
+%{  
+  first_sledgehammer_command: IsabelleClient.messages(text_task, line: 5),
+  first_proof_command: IsabelleClient.messages(text_task, line: 6),
+  second_sledgehammer_command: IsabelleClient.messages(text_task, line: 9),
+  second_proof_command: IsabelleClient.messages(text_task, line: 10),
+}
 ```
 
 ```elixir
@@ -294,5 +272,5 @@ scoped_messages
 ```elixir
 {:ok, nil} = IsabelleClient.shutdown_server(client)
 :ok = IsabelleClient.close(client)
-IsabelleClient.kill_server(client.server_name)
+IsabelleClient.Raw.kill_server(client.server_name)
 ```

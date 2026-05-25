@@ -6,15 +6,17 @@ The library speaks Isabelle's server protocol directly. See Chapter 4 in the [Is
 
 ## Clients
 
-`IsabelleClient` supports two workflows. The raw-socket workflow is stateless:
-it exposes the TCP socket and gives you explicit `command/3`,
-`async_command/3`, and `await_task/3` helpers. The stateful workflow keeps the
-socket and current session in a struct, and awaits asynchronous Isabelle tasks
-for common session operations.
+`IsabelleClient` is the default stateful client. It keeps the socket and current
+session in a struct, and awaits asynchronous Isabelle tasks for common session
+operations.
 
 `IsabelleClient.Shared` is a `GenServer` wrapper. It owns the socket, so callers
 may safely share it across processes while concurrent Isabelle tasks are routed
 back to the right caller by task id.
+
+`IsabelleClient.Raw` is the protocol-level client. It exposes the TCP socket,
+keeps no session state, and gives you explicit `command/3`, `async_command/3`,
+and `await_task/3` helpers.
 
 ## Tutorial Livebooks
 
@@ -166,4 +168,19 @@ task =
 
 {:ok, checked} = Task.await(task, 120_000)
 IsabelleClient.messages(checked)
+```
+
+### Raw Client
+
+Use `IsabelleClient.Raw` when you want direct socket ownership and explicit
+task waiting:
+
+```elixir
+{:ok, [server]} = IsabelleClient.Raw.new_server("example", 0)
+{:ok, socket} = IsabelleClient.Raw.connect(server.password, server.host, server.port)
+
+{:ok, task} = IsabelleClient.Raw.start_session(socket, session: "HOL")
+{:ok, task} = IsabelleClient.Raw.await_task(socket, task, 120_000)
+
+session_id = IsabelleClient.extract_session(task)
 ```

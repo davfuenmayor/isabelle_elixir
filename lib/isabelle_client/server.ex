@@ -22,6 +22,7 @@ defmodule IsabelleClient.Server do
             password: String.t()
           }
 
+    @doc false
     def fetch(%__MODULE__{name: name}, key) when key in [:name, "name"], do: {:ok, name}
     def fetch(%__MODULE__{host: host}, key) when key in [:host, "host"], do: {:ok, host}
     def fetch(%__MODULE__{port: port}, key) when key in [:port, "port"], do: {:ok, port}

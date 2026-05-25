@@ -55,17 +55,6 @@ The returned `pid` is the shared client handle.
 Process.alive?(pid)
 ```
 
-```elixir
-{:ok, commands} = IsabelleClient.Shared.help(pid)
-{:ok, %{"client" => "shared-start"} = started_echo} =
-  IsabelleClient.Shared.echo(pid, %{client: "shared-start"})
-
-%{
-  has_use_theories?: "use_theories" in commands,
-  echoed: started_echo
-}
-```
-
 ## Concurrent Synchronous Commands
 
 These calls are safe to run from many processes. They still pass through one
@@ -226,8 +215,7 @@ true =
   completion_order: completion_order,
   checked_theories: Map.keys(results_by_theory) |> Enum.sort(),
   event_types: events |> Enum.map(fn {_theory, type, _task_id, _body} -> type end) |> Enum.uniq(),
-  note_count: length(notes),
-  notes_are_events?: true
+  note_count: length(notes)
 }
 ```
 

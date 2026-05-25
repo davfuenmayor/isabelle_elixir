@@ -11,6 +11,7 @@ defmodule IsabelleClient.Result do
 
     defstruct [:line, :offset, :end_offset, :file, :id]
 
+    @doc false
     def from_map(nil), do: nil
 
     def from_map(%{} = map) do
@@ -29,6 +30,7 @@ defmodule IsabelleClient.Result do
 
     defstruct [:kind, :message, :pos, raw: %{}]
 
+    @doc false
     def from_map(%{} = map) do
       %__MODULE__{
         kind: Map.get(map, "kind"),
@@ -44,6 +46,7 @@ defmodule IsabelleClient.Result do
 
     defstruct [:name, :base64, :body, raw: %{}]
 
+    @doc false
     def from_map(%{} = map) do
       %__MODULE__{
         name: Map.get(map, "name"),
@@ -59,6 +62,7 @@ defmodule IsabelleClient.Result do
 
     defstruct [:node_name, :theory_name, :status, messages: [], exports: [], raw: %{}]
 
+    @doc false
     def from_map(%{} = map) do
       %__MODULE__{
         node_name: Map.get(map, "node_name"),
@@ -77,6 +81,7 @@ defmodule IsabelleClient.Result do
 
     defstruct [:ok, errors: [], nodes: [], raw: %{}]
 
+    @doc false
     def from_map(%{"nodes" => nodes} = map) when is_list(nodes) do
       %__MODULE__{
         ok: Map.get(map, "ok"),
