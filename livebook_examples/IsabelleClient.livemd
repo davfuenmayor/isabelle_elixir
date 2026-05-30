@@ -1,25 +1,20 @@
 # IsabelleClient
 
-## Start Here
+## Intro
 
-`IsabelleClient` is the ordinary user-facing client. It keeps the socket and the
-current session in a struct, awaits Isabelle tasks for you, and adds
+`IsabelleClient` is the ordinary user-facing client. It keeps the socket and a
+stack of started sessions in a struct, awaits Isabelle tasks for you, and adds
 helpers for checking text or files.
 
-Start here if you are learning the library. This notebook follows the normal
-workflow: start a local `HOL` session, run ordinary commands, check theory
-text, inspect Isabelle messages, check a `.thy` file, use typed result helpers,
-work with explicit sessions, and clean up.
-
-The other notebooks build on this one:
+Start here if you are learning the library. The other notebooks build on this one:
 
 * `IsabelleClientShared.livemd` is for sharing one connection across many
   Elixir processes
 * `IsabelleClientRaw.livemd` is for protocol-level control with raw sockets
 
-## Setup
+<!-- livebook:{"break_markdown":true} -->
 
-When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.2"}`.
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
 
 ```elixir
 Mix.install([
@@ -27,178 +22,172 @@ Mix.install([
 ])
 ```
 
+Setup has two explicit steps.
+
+1. Start a local Isabelle server (alternatively, you can locate one you have access to).
+2. Connect to a running server to obtain a client object.
+
+After this, we can start live Isabelle "sessions" to do our theory-checking work.
+
+## Connecting to a Server
+
+If the Isabelle server is already running on another machine, skip
+`start_server` and connect directly with its password, host, and port:
+
 ```elixir
-IsabelleClient.Server.executable()
+# {:ok, client} =
+#   IsabelleClient.connect("server-password",
+#     host: "isabelle.example.org",
+#     port: 9999
+#   )
 ```
 
-## Start A Local Session
-
-`start/1` starts a resident Isabelle server, connects to it, and starts a
-session. `with_session/2` is the same lifecycle wrapped around a function.
+Otherwise we can start a local resident server and connect to it. We first need to make sure we can access Isabelle's executable.
 
 ```elixir
-{:ok, client, start_task} =
-  IsabelleClient.start(
-    session: "HOL",
-    server_name: "livebook_client_#{System.unique_integer([:positive])}",
-    timeout: 120_000
+#System.put_env("ISABELLE_TOOL", "path/to/isabelle/executable") # optionally, if needed
+
+IsabelleClient.Server.executable() # should return Isabelle executable path
+```
+
+The previous cell returns the path of the Isabelle executable, which is read from the environment variable `ISABELLE_TOOL`. If this variable is not set, then the executable `isabelle` is resolved from PATH and its full path is stored in `ISABELLE_TOOL`.
+
+```elixir
+System.get_env("ISABELLE_TOOL")
+```
+
+We can now start a server instance (we can start many on a machine):
+
+```elixir
+{:ok, server} =
+  IsabelleClient.start_server(
+    server_name: "livebook_client_#{System.unique_integer([:positive])}"
   )
+server
+```
 
-{client.session_id, start_task.status}
+And connect to the server (this returns a `client` object):
+
+```elixir
+{:ok, client} = IsabelleClient.connect(server)
+client
 ```
 
 ```elixir
-active_session = IsabelleClient.session(start_task)
-{active_session.id == client.session_id, active_session.tmp_dir}
+IsabelleClient.active_session(client)
 ```
 
+The returned `client` is just an Elixir struct that owns one TCP socket and
+keeps a LIFO stack of started sessions. The top session is the active session.
+
+<!-- livebook:{"branch_parent_index":1} -->
+
+## Session-less Commands
+
+`echo`, `help`, and `command` are synchronous Isabelle server commands.
+They are useful for smoke tests and for commands that do not create async
+Isabelle tasks. Note the automatic conversion between Elixir structs and JSON payloads.
+
 ```elixir
-{:ok, "stateful"} = IsabelleClient.echo(client, "stateful")
+IsabelleClient.echo(client, %{
+  label: "echo some map",
+  message: "hello world"
+})
 ```
 
 ```elixir
 {:ok, commands} = IsabelleClient.help(client)
-
-{:ok, echoed} =
-  IsabelleClient.command(client, "echo", %{
-    client: "stateful",
-    command: "generic command/4"
-  })
-
-%{
-  has_session_start?: "session_start" in commands,
-  echoed: echoed
-}
-```
-
-`build_session/3` is usually only needed when you want to build an Isabelle
-image explicitly. `start/1` already started `HOL` above.
-
-```elixir
-{:ok, build_task} = IsabelleClient.build_session(client, [session: "HOL"], 120_000)
-{build_task.status, build_task.result["ok"]}
-```
-
-## Check Text
-
-When the text is not a complete theory, `check_text/5` wraps it as a theory
-importing `Main`.
-
-```elixir
-text_body = """
-lemma "x = x"
-  sledgehammer
-  by simp
-
-lemma "xs @ [] = xs"
-  sledgehammer
-  by simp
-"""
-
-{:ok, text_task} =
-  IsabelleClient.check_text(client, "LiveTextExample", text_body, [], 120_000)
-
-true = text_task.result["ok"]
-```
-
-Diagnostic maps include source positions. `messages/2`, `diagnostics/2`,
-`errors/2`, and `warnings/2` accept `line: n`, `line: first..last`,
-`line: [n, ...]`, and `offset: n`. The offset is matched against
-`pos.offset..pos.end_offset`. `errors/2` includes Isabelle's cumulative
-top-level errors as well as node-level error diagnostics.
-
-```elixir
-IsabelleClient.diagnostics(text_task, line: 6..10)
+commands
 ```
 
 ```elixir
-%{  
-  first_sledgehammer_command: IsabelleClient.messages(text_task, line: 5),
-  first_proof_command: IsabelleClient.messages(text_task, line: 6),
-  second_sledgehammer_command: IsabelleClient.messages(text_task, line: 9),
-  second_proof_command: IsabelleClient.messages(text_task, line: 10),
-}
+{:ok, result} = IsabelleClient.command(client, "echo", "some stuff")
+result
 ```
 
+<!-- livebook:{"branch_parent_index":1} -->
+
+## Managing Sessions
+
+Isabelle sessions are server resources. Starting a session in an `%IsabelleClient{}` creates a new Isabelle server session and pushes it onto `client.sessions`, thus making it "active". Sessions will outlive a client if not stopped, so they can be shared across client connections if their `session_id` is known. Keep session ids that you want to pass to another client.
+
+`start_session/3` accepts Isabelle `session_start` arguments. In Isabelle,
+`session_start` first builds or reuses a session image (more on this below), so it accepts the same
+`session_build` arguments (`session`, `preferences`, `options`, `dirs`,
+`include_sessions`, `verbose`) plus `print_mode`. Atom keys are normalized to
+Isabelle JSON keys.
+It also accepts a library-only `label:` that is stored locally and not sent to
+Isabelle.
+Like other async Isabelle tasks, the returned start task may contain
+message-shaped notes; we can use the functions `messages` and `diagnostics` to inspect them.
+
 ```elixir
-typed_text_result = IsabelleClient.Result.decode(text_task)
-typed_node = IsabelleClient.node(text_task, "Draft.LiveTextExample")
-
-%{
-  ok?: typed_text_result.ok,
-  node_count: length(IsabelleClient.nodes(text_task)),
-  node_name: typed_node.node_name,
-  first_message_line: List.first(typed_node.messages).pos.line,
-  exports: IsabelleClient.exports(text_task),
-  top_level_errors: IsabelleClient.top_level_errors(text_task)
-}
-```
-
-The same result helpers work for failed tasks. `errors/2` combines Isabelle's
-top-level errors with node-level error diagnostics.
-
-```elixir
-bad_result =
-  IsabelleClient.check_text(
+{:ok, client, start_task} =
+  IsabelleClient.start_session(
     client,
-    "BrokenExample",
-    "lemma \"x = y\"\n  by simp",
-    [],
-    120_000
+    [session: "HOL", label: "main", print_mode: ["ASCII"], verbose: true],
+    20_000
   )
-
-bad_task =
-  case bad_result do
-    {:ok, task} -> task
-    {:error, task} -> task
-  end
-
-%{
-  status: bad_task.status,
-  ok?: get_in(bad_task.result, ["ok"]),
-  errors: IsabelleClient.errors(bad_task),
-  diagnostics: IsabelleClient.diagnostics(bad_task)
-}
+IsabelleClient.messages(start_task)
 ```
-
-## Explicit Sessions
-
-The client remembers one active session, but Isabelle sessions are server
-resources. You may pass an explicit session id when using a different session.
 
 ```elixir
-{:ok, client, other_start_task} =
-  IsabelleClient.start_session(client, [session: "HOL"], 120_000)
-
-other_session = IsabelleClient.session(other_start_task)
-
-{:ok, explicit_task} =
-  IsabelleClient.use_theories(
-    client,
-    [session_id: active_session.id, theories: ["LiveTextExample"], master_dir: active_session.tmp_dir],
-    120_000
-  )
-
-{other_session.id == client.session_id, explicit_task.result["ok"]}
+{IsabelleClient.active_session(client).id, client.sessions}
 ```
 
-Session-start results can be read either as raw maps or typed session structs.
+The "active session" is library-side ergonomics, not an Isabelle server concept.
+Isabelle commands operate on explicit session ids; `IsabelleClient` uses the
+session at the top of the stack so calls such as `use_theories`, `check_text`, and `stop_session` can omit `session_id:`.
+
+Creating another session on the same client does not destroy the old ones. Older sessions remain usable until you stop them explicitly. Pass `session_id:` when you
+want to check theories in a non-active session.
+
+We start a second session for illustration:
 
 ```elixir
-%{
-  active_session_id: client.session_id,
-  extracted_from_task: IsabelleClient.extract_session(other_start_task),
-  typed_session: other_session
-}
+{:ok, client, _} = IsabelleClient.start_session(client, [session: "HOL"], 20_000)
+
+{IsabelleClient.active_session(client).id, client.sessions}
 ```
 
-## Check A File
+(__Beware__: in Livebook, re-running the previous cell starts from the upstream `client` value again; it does not accumulate sessions from the previous run of the same cell.)
 
-`check_file/4` derives `master_dir` and theory name from the file path.
+<!-- livebook:{"break_markdown":true} -->
+
+Invoking `stop_session` without a session id stops the active session (in the Isabelle server) and pops it from the `client.sessions` stack. The previous session becomes active again (if any).
+
+```elixir
+{:ok, client, _} = IsabelleClient.stop_session(client, 20_000)
+client.sessions
+```
+
+Sessions (active or not) can also be stopped (and thus removed from the stack) by passing their id explicitly.
+
+```elixir
+session_id = IsabelleClient.active_session(client).id || "0"
+{:ok, client, _} = IsabelleClient.stop_session(client, session_id)
+client.sessions
+```
+
+Beware that `client.sessions` is local bookkeeping, not a server query. If a session was
+stopped by another client or by a Livebook cell you already ran, Isabelle can
+correctly answer `No session ...` for an id still present in an old client
+value. Rebind the client returned by `stop_session`, or drop the stale session object from `client.sessions` with
+`IsabelleClient.forget_session`.
+
+```elixir
+#IsabelleClient.forget_session(client, "stale_session_id")
+```
+
+## Checking Theories
+
+`use_theories` is the server-side entry point for formally checking theories with Isabelle. It checks a list of theory files in a folder ("master_dir").
+
+We start by writing a new theory to disk.
 
 ```elixir
 theory_dir =
-  Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_stateful_#{System.unique_integer([:positive])}")
+  Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_#{System.unique_integer([:positive])}")
 
 File.mkdir_p!(theory_dir)
 
@@ -220,14 +209,103 @@ end
 """)
 ```
 
-```elixir
-{:ok, file_task} = IsabelleClient.check_file(client, theory_path, [], 120_000)
+For the sake of illustration, we start two sessions:
 
-%{
-  ok?: file_task.result["ok"],
-  sledgehammer_lines: IsabelleClient.messages(file_task, line: [5, 9]),
-  proof_lines: IsabelleClient.messages(file_task, line: [6, 10])
-}
+```elixir
+{:ok, client, _} = IsabelleClient.start_session(client, [session: "HOL"], 20_000)
+former_session = IsabelleClient.active_session(client)
+{:ok, client, _} = IsabelleClient.start_session(client, [session: "HOL"], 20_000)
+latter_session = IsabelleClient.active_session(client)
+client.sessions # should have two
+```
+
+`use_theories` takes a keyword list or map of Isabelle server arguments. The
+library forwards these arguments to Isabelle after normalizing atom keys, so we
+can customize `session_id`, `theories`, `master_dir`, `pretty_margin`,
+`unicode_symbols`, `export_pattern`, `check_delay`, `check_limit`,
+`watchdog_timeout`, and `nodes_status_delay`. For example, this flexibility allows us below to
+explicitly reference a session other than the one "active" in the client and a directory other than the given session's temporary directory `tmp_dir` (which are the default values).
+
+```elixir
+{:ok, use_theories_task} =
+  IsabelleClient.use_theories(
+    client,
+    [
+      session_id: former_session.id,
+      theories: ["LiveFileExample"],
+      master_dir: theory_dir
+    ],
+    20_000
+  )
+IsabelleClient.messages(use_theories_task)
+```
+
+The raw task result is available when you need Isabelle's exact payload.
+The interesting part is usually the `"nodes"` list.
+
+```elixir
+use_theories_task
+```
+
+We can easily extract all messages from a `use_theories` task (as would be shown in the output panel in the Isabelle editor). We will see later more methods for filtering and querying such task results more granularly.
+
+```elixir
+IsabelleClient.messages(use_theories_task)
+```
+
+`check_file` is a convenient wrapper around `use_theories` for checking a single theory.  It derives `master_dir` and theory name from the file path.
+
+```elixir
+IO.puts(theory_path) # recalling
+
+{:ok, use_theories_task2} =
+  IsabelleClient.check_file(client, theory_path, [], 20_000)
+
+IsabelleClient.messages(use_theories_task2)
+```
+
+For a text snippet that is not a complete theory, `check_text` writes a small
+theory file in the session's temporary directory and invokes the `use_theories` functionality. If the text already starts with a `theory` declaration, `check_text/5` writes it
+as-is instead of wrapping it. Otherwise, the generated file will get exactly one header line before your text:
+
+```isabelle
+theory LiveTextExample imports Main begin
+<your text starts on line 2>
+end
+```
+
+Note that in the latter case: line `n` of your snippet appears as line `n + 1` in
+Isabelle diagnostics, and analogously with "offsets" (more on this later). Use `imports:` if you don't provide a `theory` declaration and want imports other than `Main`.
+
+```elixir
+text_body = """
+lemma "xs @ [] = xs"
+  by simp
+"""
+
+{:ok, use_theories_task3} =
+  IsabelleClient.check_text(client, "LiveTextExample", text_body, [], 20_000)
+
+IsabelleClient.messages(use_theories_task3)
+```
+
+The written file is ordinary Isabelle source:
+
+```elixir
+session_tmp_dir = IsabelleClient.active_session(client).tmp_dir
+File.read!(Path.join(session_tmp_dir, "LiveTextExample.thy"))
+```
+
+Finally, we can "purge" theories away from a running session:
+
+```elixir
+{:ok, purge_result} =
+  IsabelleClient.purge_theories(client,
+    theories: ["LiveTextExample"],
+    master_dir: session_tmp_dir
+  )
+
+{purge_result["purged"], purge_result["retained"]}
 ```
 
 ```elixir
@@ -240,37 +318,242 @@ end
 {purge_result["purged"], purge_result["retained"]}
 ```
 
-## Scoped Sessions
+## Filtering and Querying Results
 
-`with_session/2` is the shortest safe shape for scripts: it starts a local
-server/session, passes the client to your function, then stops and shuts down.
+For the `use_theories`-based functionality, Isabelle attaches diagnostics to source "positions". The common helper functions
+are:
+
+* `diagnostics/2` for raw diagnostic maps
+* `messages/2` for message strings
+* `warnings/2` for warning strings
+* `errors/2` for error strings, including top-level errors
+
+We start by recalling previous theory file content:
 
 ```elixir
-{:ok, scoped_messages} =
-  IsabelleClient.with_session([timeout: 120_000], fn scoped ->
-    {:ok, task} =
-      IsabelleClient.check_text(scoped, "ScopedExample", "lemma \"x = x\"\n  by simp", [], 120_000)
+theory_path
+|> File.read! |> IO.puts
+```
 
-    {:ok, IsabelleClient.messages(task)}
+and looking at the raw diagnostics:
+
+```elixir
+{:ok, task} = IsabelleClient.check_file(client, theory_path, [], 20_000)
+IsabelleClient.diagnostics(task)
+```
+
+The "positions" reported, being (nested) Elixir maps, can be processed using standard functions:
+
+```elixir
+text_positions =
+  use_theories_task
+  |> IsabelleClient.diagnostics()
+  |> Enum.map(fn diagnostic ->
+    %{
+      kind: diagnostic["kind"],
+      line: get_in(diagnostic, ["pos", "line"]),
+      file: get_in(diagnostic, ["pos", "file"]),
+      offset: get_in(diagnostic, ["pos", "offset"]),
+      end_offset: get_in(diagnostic, ["pos", "end_offset"]),
+      message: diagnostic["message"]
+    }
   end)
 
-scoped_messages
+text_positions
+```
+
+The library provides some further conveniences for querying and filtering diagnostics (`errors`, `warnings` and we saw `messages` before).
+All of them accept `file:`, `line:`, and `offset:` parameters. A diagnostic will match `file: path` when its "position" lies in the source file path indicated, `line: m` when it comes from the corresponding line in the source file, and `offset: n` when `n` is inside its `pos.offset..pos.end_offset` range. Offsets are absolute Isabelle symbol offsets from the start of the file, not columns within the line.
+
+```elixir
+%{
+  all_messages: IsabelleClient.messages(use_theories_task),
+  first_file: List.first(text_positions).file,
+  file_messages: IsabelleClient.messages(use_theories_task, file: List.first(text_positions).file),
+  sledgehammer_lines: IsabelleClient.messages(use_theories_task, line: [5, 9]),
+  first_proof_line: IsabelleClient.messages(use_theories_task, line: 6),
+  second_proof_line: IsabelleClient.messages(use_theories_task, line: 10),
+  proof_line_range: IsabelleClient.messages(use_theories_task, line: 6..10)
+}
+```
+
+File and line filters are often enough. Offsets matter when a source line has several
+commands, as in the following:
+
+```elixir
+dummy_text = String.duplicate("(*Lorem ipsum dolor sit amet.*)\n", 100)
+theory_body = ~s(lemma "x = x" nitpick[satisfy] sledgehammer by simp \n #{dummy_text} \n 
+                  lemma "xs @ [] = xs" nitpick[satisfy] by simp)
+
+{:ok, use_theories_task} =
+  IsabelleClient.check_text(client, "OffsetExample", theory_body, [], 20_000)
+```
+
+The text snippet starts on line 2 because line 1 is the generated theory header:
+
+```elixir
+IsabelleClient.messages(use_theories_task, line: 2)
+```
+
+Now assume we only want to get the sledgehammer output on the first line. Then it suffices to pass its offset. Note, however, that offsets are global: Isabelle reports absolute symbol offsets from the
+beginning of the written source file, not columns within a line.
+
+```elixir
+header_offset = String.length("theory OffsetExample imports Main begin\n")
+sledgehammer_offset = header_offset + 32 # anything between 32 and 44 shall work
+IsabelleClient.messages(use_theories_task, offset: sledgehammer_offset)
+```
+
+If we want both nitpick outputs __only__, then we need to find out their (global) offsets in the file.
+
+```elixir
+nitpick_offsets =
+  use_theories_task
+  |> IsabelleClient.diagnostics()
+  |> Enum.filter(fn diagnostic ->
+    String.contains?(diagnostic["message"], "Nitpick") and
+      is_integer(get_in(diagnostic, ["pos", "offset"]))
+  end)
+  |> Enum.map(&get_in(&1, ["pos", "offset"]))
+  |> Enum.uniq()
+
+%{
+  offsets: nitpick_offsets,
+  messages:
+    nitpick_offsets
+    |> Enum.flat_map(&IsabelleClient.messages(use_theories_task, offset: &1))
+    |> Enum.uniq()
+}
+```
+
+When Isabelle rejects a theory, keep the returned task: the same result helpers
+still work. `errors` combines Isabelle's top-level errors with node-level
+error diagnostics (sometimes they might be identical).
+
+```elixir
+broken_text = "lemma \"x = y\"\n  by simp"
+
+{:ok, error_task} =
+  IsabelleClient.check_text(client, "BrokenExample", broken_text, [], 20_000)
+```
+
+```elixir
+IsabelleClient.errors(error_task, line: 3)
+```
+
+<!-- livebook:{"branch_parent_index":1} -->
+
+## Building Sessions
+
+`build_session` is usually only needed when you want to build an Isabelle
+session-image explicitly. It accepts Isabelle `session_build` arguments such as
+`options`, `dirs`, `include_sessions`, `preferences`, and `verbose`. Like
+`start_session` and `use_theories`, it creates an asynchronous Isabelle task.
+Note that `build_session` does not create a live server session: it only
+builds a reusable session image.
+
+This small session has its own `ROOT` and theory.
+
+```elixir
+suffix = System.unique_integer([:positive])
+build_session = "LivebookBuild#{suffix}"
+build_root = Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_build_#{suffix}")
+File.mkdir_p!(build_root)
+
+File.write!(Path.join(build_root, "ROOT"), """
+session "#{build_session}" = "HOL" +
+  options [document = false, show_question_marks = false]
+  theories
+    BuildSessionExample
+""")
+
+File.write!(Path.join(build_root, "BuildSessionExample.thy"), ~S"""
+theory BuildSessionExample
+  imports Main
+begin
+
+definition union (infix "\<squnion>" 99)
+  where "A \<squnion> B \<equiv> \<lambda>w. A w \<or> B w"
+
+end
+""")
+```
+
+`build_session` asks Isabelle to process the session image. Build progress is
+reported as task notes, as with `start_session`; `messages/1` and
+`diagnostics/1` extract the message-shaped notes just like they extract theory
+diagnostics from `use_theories` results.
+
+```elixir
+{:ok, build_session_task} =
+  IsabelleClient.build_session(
+    client,
+    [
+      session: build_session,
+      dirs: [build_root],
+      verbose: true
+    ],
+    20_000
+  )
+IsabelleClient.messages(build_session_task)
+```
+
+The `session_build` result can also be decoded into a struct.
+
+```elixir
+IsabelleClient.session_build_result(build_session_task)
+```
+
+Now start a live session from the image we built. This becomes the client's
+active session.
+
+```elixir
+{:ok, client, session_task} =
+  IsabelleClient.start_session(client, [session: build_session, dirs: [build_root]], 120_000)
+
+IsabelleClient.messages(session_task)
+```
+
+```elixir
+text_body = ~S"""
+lemma union_comm: "A \<squnion> B = B \<squnion> A" unfolding union_def by blast
+"""
+
+{:ok, task} =
+  IsabelleClient.check_text(
+    client,
+    "UseSessionExample",
+    text_body,
+    [imports: "#{build_session}.BuildSessionExample"],
+    20_000
+  )
+
+IsabelleClient.messages(task)
 ```
 
 ## Stop And Shutdown
 
 ```elixir
-{:ok, client, first_stop_task} = IsabelleClient.stop_session(client, active_session, 120_000)
-{client.session_id == other_session.id, first_stop_task.status}
+{client, stopped_sessions} =
+  Enum.reduce(client.sessions, {client, []}, fn session, {client, stopped} ->
+    case IsabelleClient.stop_session(client, session, 20_000) do
+      {:ok, client, task} -> {client, [{session.id, task.status} | stopped]}
+      {:error, client, task} -> {client, [{session.id, task.status} | stopped]}
+    end
+  end)
+
+%{
+  stopped_sessions: Enum.reverse(stopped_sessions),
+  remaining_sessions: client.sessions
+}
 ```
 
 ```elixir
-{:ok, client, stop_task} = IsabelleClient.stop_session(client, 120_000)
-{client.session_id, stop_task.status}
-```
+shutdown_result = IsabelleClient.shutdown_server(client)
+close_result = IsabelleClient.close(client)
 
-```elixir
-{:ok, nil} = IsabelleClient.shutdown_server(client)
-:ok = IsabelleClient.close(client)
-IsabelleClient.Raw.kill_server(client.server_name)
+%{
+  shutdown: shutdown_result,
+  close: close_result
+}
 ```

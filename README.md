@@ -2,185 +2,131 @@
 
 Elixir clients for the [Isabelle](https://isabelle.in.tum.de/) server.
 
-The library speaks Isabelle's server protocol directly. See Chapter 4 in the [Isabelle system manual](https://isabelle.in.tum.de/doc/system.pdf) for the specification.
+The library talks to Isabelle's TCP server protocol directly. For protocol
+details, see chapter 4 of the
+[Isabelle system manual](https://isabelle.in.tum.de/doc/system.pdf).
 
-## Clients
+## Installation
 
-`IsabelleClient` is the default stateful client. It keeps the socket and current
-session in a struct, and awaits asynchronous Isabelle tasks for common session
-operations.
+```elixir
+{:isabelle_elixir, "~> 0.3"}
+```
 
-`IsabelleClient.Shared` is a `GenServer` wrapper. It owns the socket, so callers
-may safely share it across processes while concurrent Isabelle tasks are routed
-back to the right caller by task id.
-
-`IsabelleClient.Raw` is the protocol-level client. It exposes the TCP socket,
-keeps no session state, and gives you explicit `command/3`, `async_command/3`,
-and `await_task/3` helpers.
-
-## Tutorial Livebooks
-
-The notebooks in `livebook_examples/` are intended to be read and run in this
-order:
-
-1. `IsabelleClient.livemd` shows the default stateful client for ordinary use:
-   start `HOL`, check theory text, inspect messages, and clean up.
-2. `IsabelleClientShared.livemd` shows the process-owning client and why it is
-   the right choice when multiple Elixir processes share one Isabelle
-   connection.
-3. `IsabelleClientRaw.livemd` introduces the raw-socket building blocks,
-   protocol commands, and explicit task handling.
-
-Together they serve as the tutorial for the library. They start local Isabelle
-servers, run smoke tests, build and start a `HOL` session, check theories,
-purge, stop, and clean up. The default notebook is the best starting point;
-the Shared and Raw notebooks are for concurrency and protocol-level control.
-
-## Setup
-
-The local server helpers read the full Isabelle executable path from
-`ISABELLE_TOOL`:
+Local server helpers need the Isabelle executable. Set `ISABELLE_TOOL` when
+`isabelle` is not already on `PATH`:
 
 ```sh
 export ISABELLE_TOOL=/path/to/Isabelle2025-2/bin/isabelle
 ```
 
-If `ISABELLE_TOOL` is not set, the library falls back to looking up `isabelle`
-on `PATH` and stores the resolved path in `ISABELLE_TOOL`.
+## Which Client?
 
-## Example
+Start with `IsabelleClient` (see corresponding livebook tutorial). It owns one socket and keeps a local LIFO stack of
+sessions, with the most recently started session treated as active.
 
-Start a local `HOL` session and check theory text:
+Use `IsabelleClient.Shared` when several Elixir processes should share one
+connection. It owns the socket in a `GenServer` and routes async task replies by
+Isabelle task id.
+
+Use `IsabelleClient.Raw` when you want protocol-level control: explicit socket
+ownership, explicit session ids, and explicit task waiting.
+
+## Quick Start
 
 ```elixir
+{:ok, server} = IsabelleClient.start_server()
+{:ok, client} = IsabelleClient.connect(server)
+{:ok, client, _task} = IsabelleClient.start_session(client, session: "HOL")
+
 {:ok, task} =
-  IsabelleClient.with_session([session: "HOL"], fn client ->
-    IsabelleClient.check_text(client, "Example", """
-    theorem "x = x"
-      sledgehammer
-      by simp
+  IsabelleClient.check_text(client, "Example", """
+  theorem "x = x"
+    by simp
+  """)
 
-    theorem "xs @ [] = xs"
-      sledgehammer
-      by simp
-    """)
-  end)
-
-IO.puts(Enum.join(IsabelleClient.messages(task), "\n"))
+IsabelleClient.messages(task)
 ```
 
-### Messages And Line Filters
+`check_text/5` is a convenience for snippets. It writes a temporary theory of
+this shape:
 
-`messages/1` returns the user-facing Isabelle node messages as a list of
-strings. Use `diagnostics/1` when you need the raw node message maps,
-including source positions. `errors/1` returns Isabelle's cumulative
-top-level errors plus node-level error messages. When Isabelle attaches
-position fields, all result helpers can filter by line and by Isabelle symbol
-offset:
-
-```elixir
-IsabelleClient.messages(task, line: 5)
-IsabelleClient.messages(task, line: 5, offset: 42)
-IsabelleClient.diagnostics(task, line: 5)
-IsabelleClient.warnings(task, line: 5..10)
-IsabelleClient.errors(task, line: [5, 10])
+```isabelle
+theory Example imports Main begin
+<your text starts on line 2>
+end
 ```
 
-`offset: n` matches diagnostics whose `pos.offset..pos.end_offset` range
-contains `n`.
+So Isabelle diagnostics report line 1 as the generated header; snippet line `n`
+appears as Isabelle line `n + 1`. Offsets are absolute Isabelle symbol offsets
+from the start of the generated file.
 
-### Keyword Arguments
+## More Examples
 
-The client accepts Isabelle-style maps and ordinary Elixir keyword arguments:
+The main tutorial is in the Livebooks:
+
+1. `livebook_examples/IsabelleClient.livemd`: default client, diagnostics,
+   line/offset filtering, sessions, checking files/text, building sessions.
+2. `livebook_examples/IsabelleClientShared.livemd`: shared process-owned
+   client for concurrent callers.
+3. `livebook_examples/IsabelleClientRaw.livemd`: raw socket usage, server
+   management, protocol commands, explicit async tasks.
+
+
+## Existing Servers
+
+You do not have to start a local server from Elixir. If an Isabelle server is
+already reachable, connect with its password, host, and port:
 
 ```elixir
-IsabelleClient.start_session(client, session: "HOL")
-IsabelleClient.use_theories(client, theories: ["Example"], master_dir: "/tmp")
+{:ok, client} =
+  IsabelleClient.connect("server-password",
+    host: "isabelle.example.org",
+    port: 9999
+  )
 ```
 
-### Typed Results And Sessions
+The same applies to `IsabelleClient.Shared` and `IsabelleClient.Raw`.
 
-Task results remain raw Isabelle maps for direct access, but common results can
-be decoded into small structs:
+## Sessions
+
+Isabelle sessions live in the server and are addressed by session id.
+`IsabelleClient` keeps local session bookkeeping for ergonomics:
 
 ```elixir
-session = IsabelleClient.session(start_task)
-typed = IsabelleClient.Result.decode(task)
+{:ok, client, _task} = IsabelleClient.start_session(client, session: "HOL", label: "main")
+
+IsabelleClient.sessions(client)
+IsabelleClient.active_session(client)
 ```
 
-`session` is an `%IsabelleClient.Session{}`. `use_theories` results decode to
-`%IsabelleClient.Result.UseTheoriesResult{}` with typed nodes, messages,
-positions, and exports.
+Starting a session pushes it onto `client.sessions`. Stopping a session removes
+it; if it was active, the previous session becomes active again. Pass
+`session_id:` when you want to address a non-active session explicitly.
+
+Sessions may outlive a client connection, and a client may use a session started
+elsewhere if given its id. `client.sessions` is local state, not a server-side
+session query.
+
+## Results
+
+`messages/1` returns user-facing Isabelle messages. `diagnostics/1` returns the
+raw diagnostic maps, including positions when Isabelle provides them.
 
 ```elixir
-typed = IsabelleClient.use_theories_result(task)
-nodes = IsabelleClient.nodes(task)
-node = IsabelleClient.node(task, "Draft.Example")
-exports = IsabelleClient.exports(task)
-top_level_errors = IsabelleClient.top_level_errors(task)
+IsabelleClient.messages(task)
+IsabelleClient.errors(task)
+IsabelleClient.warnings(task, line: 5)
+IsabelleClient.diagnostics(task, file: "Example.thy", line: 5, offset: 42)
 ```
 
-Isabelle sessions live in the server independently of a single client
-connection. The stateful clients keep an active session for convenience, but
-you may pass an explicit session id when using or stopping another session:
+Position filters support `file:`, `line:`, and `offset:`. Offsets are Isabelle
+symbol offsets, not columns.
+
+Common results can also be decoded:
 
 ```elixir
-IsabelleClient.use_theories(client,
-  session_id: session.id,
-  theories: ["Example"],
-  master_dir: "/tmp"
-)
-
-IsabelleClient.stop_session(client, session, 120_000)
-```
-
-### Checking Files
-
-For existing `.thy` files, `check_file/4` derives the theory name and
-`master_dir` from the path:
-
-```elixir
-{:ok, task} = IsabelleClient.check_file(client, "/tmp/Example.thy", [], 120_000)
-IsabelleClient.messages(task, line: 5)
-```
-
-### Shared Clients
-
-Use `IsabelleClient.Shared` when multiple Elixir processes share one Isabelle
-connection. It owns the socket and routes async `NOTE` / `FINISHED` / `FAILED`
-messages by Isabelle task id. Use `on_event` to receive task lifecycle events,
-including notes:
-
-```elixir
-{:ok, pid} = IsabelleClient.Shared.start_link(session: "HOL", timeout: 120_000)
-
-parent = self()
-
-task =
-  Task.async(fn ->
-    IsabelleClient.Shared.use_theories(
-      pid,
-      [theories: ["Example"], master_dir: "/tmp"],
-      120_000,
-      on_event: fn event -> send(parent, {:isabelle_event, event}) end
-    )
-  end)
-
-{:ok, checked} = Task.await(task, 120_000)
-IsabelleClient.messages(checked)
-```
-
-### Raw Client
-
-Use `IsabelleClient.Raw` when you want direct socket ownership and explicit
-task waiting:
-
-```elixir
-{:ok, [server]} = IsabelleClient.Raw.new_server("example", 0)
-{:ok, socket} = IsabelleClient.Raw.connect(server.password, server.host, server.port)
-
-{:ok, task} = IsabelleClient.Raw.start_session(socket, session: "HOL")
-{:ok, task} = IsabelleClient.Raw.await_task(socket, task, 120_000)
-
-session_id = IsabelleClient.extract_session(task)
+IsabelleClient.session_build_result(task)
+IsabelleClient.use_theories_result(task)
+IsabelleClient.nodes(task)
+IsabelleClient.exports(task)
 ```

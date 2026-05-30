@@ -1,6 +1,6 @@
 # IsabelleClient.Shared
 
-## Shared Connections
+## Intro
 
 `IsabelleClient.Shared` is the process-owning client. It wraps the stateful client
 in a `GenServer`, so many Elixir processes can share one Isabelle connection
@@ -25,9 +25,9 @@ not promise FIFO completion for async tasks. Completion order belongs to
 Isabelle. Keep `on_event` callbacks lightweight; sending a message to another
 process is a good pattern.
 
-## Setup
+<!-- livebook:{"break_markdown":true} -->
 
-When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.2"}`.
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
 
 ```elixir
 Mix.install([
@@ -41,18 +41,31 @@ IsabelleClient.Server.executable()
 
 ## Start A Shared Client
 
-Without a `:password`, `start_link/1` starts a local Isabelle server and session.
-The returned `pid` is the shared client handle.
+Without a `:password`, `start_link/1` starts a local Isabelle server. The
+returned `pid` is the shared client handle. We start sessions explicitly below
+so the lifecycle is visible.
 
 ```elixir
 {:ok, pid} =
   IsabelleClient.Shared.start_link(
-    session: "HOL",
     server_name: "livebook_shared_#{System.unique_integer([:positive])}",
     timeout: 120_000
   )
 
 Process.alive?(pid)
+```
+
+For an already running server, including one reachable on another host, pass its
+connection details instead of `:server_name`:
+
+```elixir
+# {:ok, pid} =
+#   IsabelleClient.Shared.start_link(
+#     password: "server-password",
+#     host: "isabelle.example.org",
+#     port: 9999,
+#     timeout: 120_000
+#   )
 ```
 
 ## Concurrent Synchronous Commands
@@ -88,27 +101,39 @@ Enum.sort(sync_results) == Enum.sort(operations)
 
 ## More Than One Session
 
-The shared process keeps one active session, but Isabelle sessions are still
-server resources. You can start additional sessions and route work to a specific
-one with `session_id:`.
+The shared process keeps the same kind of LIFO session stack as the default
+client: the most recently started session is active. Isabelle sessions are still
+server resources, and you can route work to a specific one with `session_id:`.
+`start_session/3` accepts Isabelle `session_start` arguments such as `session`,
+`preferences`, `options`, `dirs`, `include_sessions`, `verbose`, and
+`print_mode`. It also accepts a library-only `label:` that is stored locally and
+not sent to Isabelle.
 
 ```elixir
-{:ok, first_start_task} = IsabelleClient.Shared.start_session(pid, [session: "HOL"], 120_000)
+{:ok, first_start_task} =
+  IsabelleClient.Shared.start_session(
+    pid,
+    [session: "HOL", label: "shared-main", print_mode: ["ASCII"]],
+    120_000
+  )
+
 {:ok, second_start_task} = IsabelleClient.Shared.start_session(pid, [session: "HOL"], 120_000)
 
-first_session = IsabelleClient.session(first_start_task)
-second_session = IsabelleClient.session(second_start_task)
+first_session = IsabelleClient.Session.from_result(first_start_task.result)
+second_session = IsabelleClient.Session.from_result(second_start_task.result)
 
 %{
   first_session: first_session.id,
   second_session: second_session.id,
-  different?: first_session.id != second_session.id
+  different?: first_session.id != second_session.id,
+  first_start_messages: IsabelleClient.messages(first_start_task),
+  second_start_messages: IsabelleClient.messages(second_start_task)
 }
 ```
 
 ## Concurrent Theory Tasks
 
-Here the interesting part is async task routing. Each caller starts its own
+Here the interesting part is task routing. Each caller starts its own
 `use_theories` task and installs an `on_event` callback tagged with the theory
 it requested. Isabelle may finish tasks in any order, but every event receives
 the task id that belongs to that caller's task.
@@ -222,7 +247,17 @@ true =
 ## Check Text Helper
 
 `check_text/5` is available on Shared too. Use it when you do not need custom
-task callbacks.
+task callbacks. Like the default client, it writes snippets as:
+
+```isabelle
+theory SharedInlineExample imports Main begin
+<your text starts on line 2>
+end
+```
+
+Line positions therefore shift by one line. Offsets are absolute Isabelle symbol
+offsets from the beginning of the written file, so they include the generated
+header before the snippet.
 
 ```elixir
 {:ok, inline_task} =
@@ -238,7 +273,8 @@ IsabelleClient.messages(inline_task)
 ```
 
 `check_file/5` accepts the same explicit `session_id:` argument as
-`use_theories/4`.
+`use_theories/4`, so we can target the first session even though the second
+session is active.
 
 ```elixir
 {:ok, file_task} =
@@ -318,7 +354,10 @@ failure_events =
 {:ok, first_stop_task} = IsabelleClient.Shared.stop_session(pid, first_session, 120_000)
 {:ok, active_stop_task} = IsabelleClient.Shared.stop_session(pid, 120_000)
 
-{first_stop_task.status, active_stop_task.status}
+%{
+  stopped_first: first_stop_task.status,
+  stopped_active: active_stop_task.status
+}
 ```
 
 ```elixir

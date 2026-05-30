@@ -1,18 +1,17 @@
 # IsabelleClient.Raw
 
-## Protocol-Level Client
+## Intro
 
-This notebook uses `IsabelleClient.Raw`. It exposes the TCP
-socket, keeps no session state, and leaves async task waiting explicit.
+This notebook uses `IsabelleClient.Raw`. It exposes the TCP socket, keeps no
+session state, and leaves async task waiting explicit. It also exposes some basic server management functionality.
 
 Read `IsabelleClient.livemd` first if you are new to the library. The raw API is
-useful when you want to see or control the Isabelle server protocol directly.
-It starts a local server, connects to it, runs a few commands, starts `HOL`,
-checks a small theory, extracts messages, and cleans up.
+useful when you want to see or control the Isabelle server protocol directly:
+you send a command, receive a task id, then wait for the task yourself.
 
-## Setup
+<!-- livebook:{"break_markdown":true} -->
 
-When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.2"}`.
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
 
 ```elixir
 Mix.install([
@@ -24,22 +23,64 @@ Mix.install([
 IsabelleClient.Server.executable()
 ```
 
-## Start And Connect
+## Server Management
 
-Passing port `0` asks Isabelle to choose a free local port.
+Resident Isabelle servers are named. `list_servers/0` shows local resident
+servers known to Isabelle, and `kill_server/1` can force-kill one by name. This
+is mainly useful after interrupted runs.
+
+```elixir
+{:ok, servers_before_demo} = IsabelleClient.Raw.list_servers()
+servers_before_demo
+```
+
+We start two short-lived servers. Passing port `0` asks Isabelle to choose a
+free local port.
+
+```elixir
+kill_demo_names =
+  for n <- 1..2 do
+    name = "livebook_raw_kill_demo_#{n}_#{System.unique_integer([:positive])}"
+    {:ok, _server} = IsabelleClient.Raw.new_server(name, 0)
+    name
+  end
+```
+
+```elixir
+{:ok, servers_after_start} = IsabelleClient.Raw.list_servers()
+
+Enum.filter(servers_after_start, &(&1.name in kill_demo_names))
+```
+
+```elixir
+kill_results = Enum.map(kill_demo_names, &IsabelleClient.Raw.kill_server/1)
+```
+
+```elixir
+{:ok, servers_after_kill} = IsabelleClient.Raw.list_servers()
+
+%{
+  kill_statuses: Enum.map(kill_results, fn {_output, status} -> status end),
+  remaining_demo_servers: Enum.filter(servers_after_kill, &(&1.name in kill_demo_names))
+}
+```
+
+Let's leave one server running for the rest of the tutorial:
 
 ```elixir
 server_name = "livebook_raw_#{System.unique_integer([:positive])}"
-{:ok, [server]} = IsabelleClient.Raw.new_server(server_name, 0)
+{:ok, server} = IsabelleClient.Raw.new_server(server_name, 0)
+```
+
+## Session-less Commands
+
+Let's connect to a running server (running locally or elsewhere):
+
+```elixir
 {:ok, socket} = IsabelleClient.Raw.connect(server["password"], server["host"], server["port"])
 ```
 
-```elixir
-{:ok, servers} = IsabelleClient.Raw.list_servers()
-servers
-```
-
-## Synchronous Commands
+Using the socket connection we can invoke some synchronous ("sessionless") commands.
 
 ```elixir
 {:ok, commands} = IsabelleClient.Raw.help(socket)
@@ -48,14 +89,10 @@ payload = %{client: "raw", framed: String.duplicate("x", 120)}
 {:ok, %{"client" => "raw", "framed" => framed}} = IsabelleClient.Raw.echo(socket, payload)
 
 {:ok, %{"via" => "command/4"}} = IsabelleClient.Raw.command(socket, "echo", %{via: "command/4"})
-
-%{
-  has_use_theories?: "use_theories" in commands,
-  echoed_length: String.length(framed)
-}
 ```
 
 `command/4` is the escape hatch for server commands without a dedicated helper.
+It sends one request and waits for one `OK` or `ERROR` response.
 `cancel_task/2` sends the protocol-level cancellation command; cancelling an
 unknown task is harmless on the Isabelle side.
 
@@ -65,32 +102,52 @@ unknown task is harmless on the Isabelle side.
 
 ## Session Tasks
 
-Asynchronous commands first return `OK {"task": ...}`. The raw-socket workflow
-returns that task id as an `%IsabelleClient.Task{}` and leaves `await_task/3`
-explicit.
+Asynchronous commands first return `OK {"task": ...}`. Raw helpers return that
+task id as an `%IsabelleClient.Task{status: :running}`. Call `await_task/3` to
+collect `NOTE` messages and the final `FINISHED` or `FAILED` payload.
 
 ```elixir
-{:ok, build_task} = IsabelleClient.Raw.async_command(socket, "session_build", session: "HOL")
+{:ok, build_task} =
+  IsabelleClient.Raw.async_command(socket, "session_build", session: "HOL", verbose: true)
+
 {:ok, build_task} = IsabelleClient.Raw.await_task(socket, build_task, 120_000)
 
-{build_task.status, build_task.result["ok"], length(build_task.notes)}
+%{
+  status: build_task.status,
+  ok?: build_task.result["ok"],
+  messages: IsabelleClient.messages(build_task)
+}
 ```
 
 Dedicated helpers such as `start_session/3` and `use_theories/3` are thin
 wrappers around `async_command/4`.
+`start_session/3` accepts Isabelle `session_start` arguments such as `session`,
+`preferences`, `options`, `dirs`, `include_sessions`, `verbose`, and
+`print_mode`.
 
 ```elixir
-{:ok, start_task} = IsabelleClient.Raw.start_session(socket, session: "HOL")
+{:ok, start_task} =
+  IsabelleClient.Raw.start_session(socket,
+    session: "HOL",
+    verbose: true,
+    print_mode: ["ASCII"]
+  )
+
 {:ok, start_task} = IsabelleClient.Raw.poll_status(socket, start_task, 120_000)
 
 session_id = IsabelleClient.extract_session(start_task)
-{start_task.status, is_binary(session_id)}
+
+%{
+  status: start_task.status,
+  session_id: session_id,
+  messages: IsabelleClient.messages(start_task)
+}
 ```
 
 ## Check A Theory
 
-The raw socket does not remember the active session, so `session_id` is passed
-explicitly.
+The raw socket does not remember an active session. Every session command that
+needs a live session must receive `session_id` explicitly.
 
 ```elixir
 theory_dir =
@@ -119,17 +176,22 @@ end
   IsabelleClient.Raw.use_theories(socket,
     session_id: session_id,
     theories: ["RawExample"],
-    master_dir: theory_dir
+    master_dir: theory_dir,
+    pretty_margin: 80.0,
+    unicode_symbols: true,
+    export_pattern: "*",
+    check_delay: 0.1,
+    check_limit: 100,
+    watchdog_timeout: 60.0,
+    nodes_status_delay: 0.5
   )
 
 {:ok, use_task} = IsabelleClient.Raw.await_task(socket, use_task, 120_000)
 true = use_task.result["ok"]
 ```
 
-The result helpers work with raw-socket task results too.
-`errors/2` includes Isabelle's cumulative top-level errors as well as
-node-level error diagnostics. `Result.decode/1` turns common Isabelle result
-maps into small Elixir structs when that is useful.
+The result helpers work with raw-socket task results too. `Result.decode/1`
+turns common Isabelle result maps into small Elixir structs when that is useful.
 
 ```elixir
 typed = IsabelleClient.Result.decode(use_task)
@@ -149,60 +211,131 @@ typed = IsabelleClient.Result.decode(use_task)
 }
 ```
 
+## Build And Start A Custom Session
+
+The raw profile is also the clearest place to see Isabelle's `session_build`
+and `session_start` arguments. `session_start` accepts the `session_build`
+arguments plus `print_mode`.
+
+We first write a minimal Isabelle session: one `ROOT` file and one theory.
+
 ```elixir
-File.write!(Path.join(theory_dir, "RawBroken.thy"), """
-theory RawBroken imports Main
+custom_suffix = System.unique_integer([:positive])
+custom_session = "RawBuild#{custom_suffix}"
+custom_dir = Path.join(System.tmp_dir!(), "isabelle_elixir_livebook_raw_build_#{custom_suffix}")
+File.mkdir_p!(custom_dir)
+
+File.write!(Path.join(custom_dir, "ROOT"), """
+session "#{custom_session}" = "HOL" +
+  options [document = false, show_question_marks = false]
+  theories
+    RawBuildTheory
+""")
+
+File.write!(Path.join(custom_dir, "RawBuildTheory.thy"), """
+theory RawBuildTheory imports Main
 begin
 
-lemma "x = y"
+lemma raw_build_example: "x = x"
   by simp
 
 end
 """)
+```
 
-{:ok, failed_task} =
-  IsabelleClient.Raw.use_theories(socket,
-    session_id: session_id,
-    theories: ["RawBroken"],
-    master_dir: theory_dir
+Build the reusable session image first.
+
+```elixir
+{:ok, custom_build_task} =
+  IsabelleClient.Raw.build_session(socket,
+    session: custom_session,
+    dirs: [custom_dir],
+    options: ["document=false", "show_question_marks=false"],
+    include_sessions: [],
+    preferences: "",
+    verbose: true
   )
 
-failure_result = IsabelleClient.Raw.await_task(socket, failed_task, 120_000)
-
-failed_task =
-  case failure_result do
-    {:ok, task} -> task
-    {:error, task} -> task
-  end
+{:ok, custom_build_task} =
+  IsabelleClient.Raw.await_task(socket, custom_build_task, 120_000)
 
 %{
-  status: failed_task.status,
-  ok?: get_in(failed_task.result, ["ok"]),
-  errors: IsabelleClient.errors(failed_task)
+  result: IsabelleClient.session_build_result(custom_build_task),
+  messages: IsabelleClient.messages(custom_build_task)
 }
 ```
 
+Start a live session from the built image. Keep `dirs`, so Isabelle can
+resolve the custom session name.
+
 ```elixir
-{:ok, purge_result} =
-  IsabelleClient.Raw.purge_theories(socket,
-    session_id: session_id,
-    theories: ["RawExample", "RawBroken"],
-    master_dir: theory_dir
+{:ok, custom_start_task} =
+  IsabelleClient.Raw.start_session(socket,
+    session: custom_session,
+    dirs: [custom_dir],
+    options: ["document=false"],
+    include_sessions: [],
+    preferences: "",
+    verbose: true,
+    print_mode: ["ASCII"]
   )
 
-{purge_result["purged"], purge_result["retained"]}
+{:ok, custom_start_task} =
+  IsabelleClient.Raw.await_task(socket, custom_start_task, 120_000)
+
+custom_session_id = IsabelleClient.extract_session(custom_start_task)
+
+%{
+  session_id: custom_session_id,
+  messages: IsabelleClient.messages(custom_start_task)
+}
+```
+
+Use the returned session id explicitly. Raw commands do not remember an active
+session for you.
+
+```elixir
+File.write!(Path.join(custom_dir, "RawBuildUse.thy"), """
+theory RawBuildUse imports RawBuildTheory
+begin
+
+lemma raw_build_use: "x = x"
+  by (rule raw_build_example)
+
+end
+""")
+
+{:ok, custom_use_task} =
+  IsabelleClient.Raw.use_theories(socket,
+    session_id: custom_session_id,
+    theories: ["RawBuildUse"],
+    master_dir: custom_dir
+  )
+
+{:ok, custom_use_task} =
+  IsabelleClient.Raw.await_task(socket, custom_use_task, 120_000)
+
+%{
+  ok?: custom_use_task.result["ok"],
+  messages: IsabelleClient.messages(custom_use_task)
+}
 ```
 
 ## Stop And Shutdown
 
 ```elixir
+# Stop the custom session before the original one.
+{:ok, custom_stop_task} = IsabelleClient.Raw.stop_session(socket, custom_session_id)
+{:ok, custom_stop_task} = IsabelleClient.Raw.await_task(socket, custom_stop_task, 120_000)
+
 {:ok, stop_task} = IsabelleClient.Raw.stop_session(socket, session_id)
 {:ok, stop_task} = IsabelleClient.Raw.await_task(socket, stop_task, 120_000)
-stop_task.status
+
+{stop_task.status, custom_stop_task.status}
 ```
 
 ```elixir
 {:ok, nil} = IsabelleClient.Raw.shutdown_server(socket)
 :ok = IsabelleClient.Raw.close(socket)
-IsabelleClient.Raw.kill_server(server_name)
+:ok
 ```

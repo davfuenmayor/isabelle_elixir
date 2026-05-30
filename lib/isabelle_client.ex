@@ -2,10 +2,11 @@ defmodule IsabelleClient do
   @moduledoc """
   Default stateful Isabelle client.
 
-  Use `%IsabelleClient{}` for scripts and LiveBooks that benefit from an active
-  session stored in a struct. It is not meant to be shared by multiple
-  concurrent processes; use `IsabelleClient.Shared` for that. Use
-  `IsabelleClient.Raw` for protocol-level socket control.
+  Use `%IsabelleClient{}` for scripts and LiveBooks that benefit from a session
+  stack in a struct. The active session is the top of `client.sessions`. It is
+  not meant to be shared by multiple concurrent processes; use
+  `IsabelleClient.Shared` for that. Use `IsabelleClient.Raw` for protocol-level
+  socket control.
   """
 
   alias IsabelleClient.Arguments
@@ -19,71 +20,48 @@ defmodule IsabelleClient do
   @default_port 9999
   @timeout 30_000
 
-  defstruct [:socket, :session, :session_id, :tmp_dir, :server_name]
+  defstruct [:socket, :server_name, sessions: []]
 
+  @typedoc "Stateful client with one socket and a local stack of Isabelle sessions."
   @type t :: %__MODULE__{
           socket: port(),
-          session: Session.t() | nil,
-          session_id: String.t() | nil,
-          tmp_dir: String.t() | nil,
+          sessions: [Session.t()],
           server_name: String.t() | nil
         }
 
   @doc """
-  Starts a local Isabelle server, connects to it, and starts a session.
+  Starts a local resident Isabelle server.
 
   Options:
 
-    * `:session` - Isabelle session name, defaults to `"HOL"`
-    * `:session_args` - additional `session_start` arguments
     * `:server_name` - resident server name, defaults to a unique name
     * `:server_port` - resident server port, defaults to `0`
-    * `:connect_timeout` - TCP/authentication timeout, defaults to `30_000`
-    * `:timeout` - session startup timeout, defaults to `:infinity`
   """
-  def start(opts \\ []) do
+  def start_server(opts \\ []) do
     server_name = Keyword.get(opts, :server_name, unique_server_name())
     server_port = Keyword.get(opts, :server_port, 0)
-    connect_timeout = Keyword.get(opts, :connect_timeout, 30_000)
-    timeout = Keyword.get(opts, :timeout, :infinity)
 
-    with {:ok, [server]} <- Raw.new_server(server_name, server_port),
-         {:ok, client} <-
-           connect(server.password,
-             host: server.host,
-             port: server.port,
-             timeout: connect_timeout
-           ) do
-      client = %{client | server_name: server.name}
+    Raw.new_server(server_name, server_port)
+  end
 
-      case start_session(client, Session.args(opts), timeout) do
-        {:ok, _client, _task} = ok ->
-          ok
+  @doc """
+  Connects to an Isabelle server and returns a stateful client struct.
 
-        error ->
-          close_local_session(client, timeout)
-          error
-      end
+  Pass a `%IsabelleClient.Server.Info{}` returned by `start_server/1`, or pass
+  the server password with explicit `:host` and `:port` options for an already
+  running local or remote server.
+  """
+  def connect(server_or_password, opts \\ [])
+
+  def connect(%IsabelleClient.Server.Info{} = server, opts) do
+    opts = Keyword.merge([host: server.host, port: server.port], opts)
+
+    with {:ok, client} <- connect(server.password, opts) do
+      {:ok, %{client | server_name: server.name}}
     end
   end
 
-  @doc "Runs a function with a fresh local Isabelle session, then stops and shuts it down."
-  def with_session(fun) when is_function(fun), do: with_session([], fun)
-
-  def with_session(opts, fun) when is_function(fun) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
-
-    with {:ok, client, _task} <- start(opts) do
-      try do
-        fun.(client)
-      after
-        close_local_session(client, timeout)
-      end
-    end
-  end
-
-  @doc "Connects to an Isabelle server and returns a stateful client struct."
-  def connect(password, opts \\ []) do
+  def connect(password, opts) do
     host = Keyword.get(opts, :host, @default_host)
     port = Keyword.get(opts, :port, @default_port)
     timeout = Keyword.get(opts, :timeout, @timeout)
@@ -93,10 +71,10 @@ defmodule IsabelleClient do
     end
   end
 
-  @doc "Closes the client's socket."
+  @doc "Closes the client's TCP socket."
   def close(%__MODULE__{socket: socket}), do: Raw.close(socket)
 
-  @doc "Runs a synchronous Isabelle command."
+  @doc "Runs a synchronous Isabelle command, normalizing Elixir keyword arguments to JSON keys."
   def command(%__MODULE__{socket: socket}, name, arg \\ nil, timeout \\ @timeout),
     do: Raw.command(socket, name, arg, timeout)
 
@@ -106,32 +84,48 @@ defmodule IsabelleClient do
   @doc "Returns the server command names supported by Isabelle."
   def help(client), do: command(client, "help")
 
-  @doc "Asks the Isabelle server process to shut down."
+  @doc "Asks the connected Isabelle server process to shut down."
   def shutdown_server(client), do: command(client, "shutdown")
 
-  @doc "Builds an Isabelle session image."
+  @doc """
+  Builds an Isabelle session image and waits for the async task result.
+
+  `args` is forwarded to Isabelle's `session_build` command after key
+  normalization. Typical keys are `:session`, `:dirs`, `:options`,
+  `:include_sessions`, `:preferences`, and `:verbose`.
+  """
   def build_session(%__MODULE__{socket: socket}, args, timeout \\ :infinity) do
     with {:ok, task} <- Raw.build_session(socket, args) do
       Raw.await_task(socket, task, timeout)
     end
   end
 
-  @doc "Starts an Isabelle session, storing it for stateful clients."
+  @doc """
+  Starts an Isabelle session and pushes it onto `client.sessions`.
+
+  The argument list or map is forwarded to Isabelle's `session_start` command,
+  which accepts `session_build` arguments (`:session`, `:preferences`,
+  `:options`, `:dirs`, `:include_sessions`, `:verbose`) plus `:print_mode`.
+
+  Pass `:label` to store a local label in the resulting session struct. Labels
+  are not sent to Isabelle. Returns `{:ok, client, task}`.
+  """
   def start_session(%__MODULE__{socket: socket} = client, args, timeout \\ :infinity) do
+    {args, label} = Session.prepare_start_args(args)
+
     with {:ok, task} <- Raw.start_session(socket, args),
-         {:ok, %Task{result: %{"session_id" => session_id} = result} = task} <-
+         {:ok, %Task{result: %{"session_id" => _} = result} = task} <-
            Raw.await_task(socket, task, timeout) do
-      session = Session.from_result(result)
-      {:ok, %{client | session: session, session_id: session_id, tmp_dir: session.tmp_dir}, task}
+      {:ok, Session.push(client, Session.from_result(result, args, label)), task}
     end
   end
 
   @doc """
   Stops a session.
 
-  With the default arguments, this stops the active session and clears it from
-  the client. Pass a `%IsabelleClient.Session{}` or session id to stop another
-  server session explicitly.
+  With the default arguments, this stops the active session and pops it from
+  the client's session stack. Pass a `%IsabelleClient.Session{}` or session id
+  to stop another server session explicitly.
   """
   def stop_session(client, session_or_timeout \\ :active, timeout \\ :infinity)
 
@@ -141,7 +135,7 @@ defmodule IsabelleClient do
   end
 
   def stop_session(%__MODULE__{} = client, :active, timeout) do
-    case client.session_id do
+    case Session.active_id(client) do
       nil -> {:error, :no_session}
       session_id -> do_stop_session(client, session_id, timeout)
     end
@@ -154,7 +148,7 @@ defmodule IsabelleClient do
   defp do_stop_session(%__MODULE__{socket: socket} = client, session_id, timeout) do
     with {:ok, task} <- Raw.stop_session(socket, session_id),
          result <- Raw.await_task(socket, task, timeout) do
-      client = Session.clear_active(client, session_id)
+      client = Session.remove(client, session_id)
 
       case result do
         {:ok, task} -> {:ok, client, task}
@@ -168,13 +162,20 @@ defmodule IsabelleClient do
 
   By default this uses the active client session. Pass `"session_id"` or
   `:session_id` in the arguments to use another server session explicitly.
+  Isabelle `use_theories` arguments are forwarded after key normalization:
+  `:session_id`, `:theories`, `:master_dir`, `:pretty_margin`,
+  `:unicode_symbols`, `:export_pattern`, `:check_delay`, `:check_limit`,
+  `:watchdog_timeout`, and `:nodes_status_delay`.
+
+  Returns `{:ok, task}` for a finished Isabelle task, or `{:error, task}` when
+  Isabelle reports task failure.
   """
   def use_theories(
         %__MODULE__{socket: socket} = client,
         args \\ nil,
         timeout \\ :infinity
       ) do
-    case Session.put_id(args, client.session_id) do
+    case Session.put_id(args, Session.active_id(client)) do
       {:ok, args} ->
         with {:ok, task} <- Raw.use_theories(socket, args) do
           Raw.await_task(socket, task, timeout)
@@ -190,9 +191,10 @@ defmodule IsabelleClient do
 
   By default this uses the active client session. Pass `"session_id"` or
   `:session_id` in the arguments to purge theories from another server session.
+  This is a synchronous Isabelle command.
   """
   def purge_theories(%__MODULE__{socket: socket} = client, args \\ nil, timeout \\ @timeout) do
-    case Session.put_id(args, client.session_id) do
+    case Session.put_id(args, Session.active_id(client)) do
       {:ok, args} -> Raw.purge_theories(socket, args, timeout)
       :error -> {:error, :no_session}
     end
@@ -203,6 +205,7 @@ defmodule IsabelleClient do
 
   By default this uses the active client session. Pass `"session_id"` or
   `:session_id` in the arguments to use another server session explicitly.
+  `master_dir` and `theories` are derived from `path` unless supplied.
   """
   def check_file(client, path, args \\ [], timeout \\ :infinity)
 
@@ -213,10 +216,19 @@ defmodule IsabelleClient do
   @doc """
   Writes and checks a theory.
 
-  If `text` is not a complete theory, it is wrapped as a theory body importing
-  `Main`, or `opts[:imports]` when provided. By default this uses the active
-  client session. Pass `"session_id"` or `:session_id` in the options to use
-  another server session explicitly.
+  If `text` is not a complete theory, it is written as:
+
+      theory <name> imports Main begin
+      <text>
+      end
+
+  Use `opts[:imports]` to replace `Main`. The provided text starts on line 2 of
+  the written file, so Isabelle diagnostics line up as `text_line + 1`. By
+  default this uses the active client session. Isabelle offsets remain
+  whole-file symbol offsets: with default `Main`, the snippet starts after
+  `27 + String.length(theory)` symbols from the generated header and newline.
+  Pass `"session_id"` or `:session_id` in the options to use another server
+  session explicitly.
   """
   def check_text(client, theory, text, opts \\ [], timeout \\ :infinity)
 
@@ -230,15 +242,29 @@ defmodule IsabelleClient do
     )
   end
 
-  @doc "Extracts the `session_id` from a finished session-start task or result map."
+  @doc "Extracts the `session_id` from a session struct, session-start task, or result map."
   defdelegate extract_session(result), to: Result
 
-  @doc "Returns a typed session struct from a session-start task or result map."
-  def session(%Task{result: result}), do: session(result)
-  def session(result), do: Session.from_result(result)
+  @doc "Returns the active session from the top of the client's session stack."
+  def active_session(%__MODULE__{} = client), do: Session.active(client)
 
-  @doc "Returns a structured `use_theories` result, or `nil` for another result shape."
+  @doc "Returns the client's session stack, newest session first."
+  def sessions(%__MODULE__{sessions: sessions}), do: sessions
+
+  @doc """
+  Removes a session from the local client stack without contacting Isabelle.
+
+  Use this when a session was stopped elsewhere, or when Isabelle reports
+  `No session ...` for an id still remembered by this client.
+  """
+  def forget_session(%__MODULE__{} = client, session_or_id),
+    do: Session.remove(client, Session.id(session_or_id))
+
+  @doc "Decodes a `use_theories` result or task into a `%IsabelleClient.Result.UseTheoriesResult{}`."
   defdelegate use_theories_result(result), to: Result
+
+  @doc "Decodes a `session_build` result or task into a `%IsabelleClient.Result.SessionBuildResult{}`."
+  defdelegate session_build_result(result), to: Result
 
   @doc "Returns typed theory nodes from a `use_theories` result."
   defdelegate nodes(result), to: Result
@@ -253,19 +279,19 @@ defmodule IsabelleClient do
   defdelegate top_level_errors(result), to: Result
   defdelegate top_level_errors(result, opts), to: Result
 
-  @doc "Returns diagnostic messages from a `use_theories` task or result."
+  @doc "Returns diagnostic messages from a task, result map, or task notes."
   defdelegate diagnostics(result), to: Result
   defdelegate diagnostics(result, opts), to: Result
 
-  @doc "Returns user-facing messages from a `use_theories` task or result map."
+  @doc "Returns user-facing message strings from a task, result map, or task notes."
   defdelegate messages(result), to: Result
   defdelegate messages(result, opts), to: Result
 
-  @doc "Returns error messages from a `use_theories` task or result map."
+  @doc "Returns error messages from a task or result map, with optional position filters."
   defdelegate errors(result), to: Result
   defdelegate errors(result, opts), to: Result
 
-  @doc "Returns warning messages from a `use_theories` task or result map."
+  @doc "Returns warning messages from a task or result map, with optional position filters."
   defdelegate warnings(result), to: Result
   defdelegate warnings(result, opts), to: Result
 
@@ -274,15 +300,5 @@ defmodule IsabelleClient do
   end
 
   defp default_master_dir(client, opts),
-    do: Map.get(opts, "master_dir") || Session.default_master_dir(client, opts)
-
-  defp close_local_session(client, timeout) do
-    stop_session(client, timeout)
-    shutdown_server(client)
-    close(client)
-    kill_local_server(client)
-  end
-
-  defp kill_local_server(%__MODULE__{server_name: nil}), do: :ok
-  defp kill_local_server(%__MODULE__{server_name: name}), do: Raw.kill_server(name)
+    do: Map.get(opts, "master_dir") || Session.default_master_dir(Session.active(client), opts)
 end

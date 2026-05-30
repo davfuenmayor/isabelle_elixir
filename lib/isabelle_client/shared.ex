@@ -21,7 +21,13 @@ defmodule IsabelleClient.Shared do
 
   defstruct [:client, :reader, pending: [], tasks: %{}]
 
-  @doc "Starts a GenServer-backed Isabelle client."
+  @doc """
+  Starts a GenServer-backed Isabelle client.
+
+  Pass `:password`, `:host`, and `:port` to connect to an existing Isabelle
+  server. Without `:password`, a local server is started. Pass `:session` to
+  start an initial session.
+  """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
 
   @doc "Alias for `start_link/1`."
@@ -55,14 +61,26 @@ defmodule IsabelleClient.Shared do
     do: async_call(server, :build_session, args, timeout, opts)
 
   @doc """
-  Starts an Isabelle session and stores its `session_id` in the client process.
+  Starts an Isabelle session and stores it in the client process.
+
+  The argument list or map is forwarded to Isabelle's `session_start` command,
+  which accepts `session_build` arguments (`:session`, `:preferences`,
+  `:options`, `:dirs`, `:include_sessions`, `:verbose`) plus `:print_mode`.
+  Pass `:label` to store a local label in the resulting session struct. Labels
+  are not sent to Isabelle.
 
   Accepts the same async task options as `build_session/4`.
   """
   def start_session(server, args, timeout \\ :infinity, opts \\ []),
     do: async_call(server, :start_session, args, timeout, opts)
 
-  @doc "Stops the active Isabelle session. Accepts the same async task options as `build_session/4`."
+  @doc """
+  Stops the active Isabelle session.
+
+  Returns `{:ok, task}` or `{:error, task}` and removes the stopped session from
+  the local client stack. Accepts the same async task options as
+  `build_session/4`.
+  """
   def stop_session(server), do: stop_session(server, :infinity, [])
 
   def stop_session(server, timeout) when is_integer(timeout) or timeout == :infinity,
@@ -74,7 +92,12 @@ defmodule IsabelleClient.Shared do
   def stop_session(server, session_or_id, timeout),
     do: stop_session(server, session_or_id, timeout, [])
 
-  @doc "Stops an explicit Isabelle session id or `%IsabelleClient.Session{}`."
+  @doc """
+  Stops an explicit Isabelle session id or `%IsabelleClient.Session{}`.
+
+  Stopping a non-active session removes it from the local stack without changing
+  the active session.
+  """
   def stop_session(server, session_or_id, timeout, opts) do
     GenServer.call(server, {:stop_session, session_or_id, timeout, opts}, call_timeout(timeout))
   end
@@ -84,6 +107,10 @@ defmodule IsabelleClient.Shared do
 
   By default this uses the active client session. Pass `"session_id"` or
   `:session_id` in the arguments to use another server session explicitly.
+  Isabelle `use_theories` arguments are forwarded after key normalization:
+  `:session_id`, `:theories`, `:master_dir`, `:pretty_margin`,
+  `:unicode_symbols`, `:export_pattern`, `:check_delay`, `:check_limit`,
+  `:watchdog_timeout`, and `:nodes_status_delay`.
 
   Accepts the same async task options as `build_session/4`.
   """
@@ -95,6 +122,7 @@ defmodule IsabelleClient.Shared do
 
   By default this uses the active client session. Pass `"session_id"` or
   `:session_id` in the arguments to purge theories from another server session.
+  This is a synchronous Isabelle command.
   """
   def purge_theories(server, args, timeout \\ @default_timeout),
     do: GenServer.call(server, {:purge_theories, args, timeout}, call_timeout(timeout))
@@ -104,7 +132,8 @@ defmodule IsabelleClient.Shared do
 
   By default this uses the active client session. Pass `"session_id"` or
   `:session_id` in the arguments to use another server session explicitly.
-  Accepts the same async task options as `build_session/4`.
+  `master_dir` and `theories` are derived from `path` unless supplied. Accepts
+  the same async task options as `build_session/4`.
   """
   def check_file(server, path, args \\ [], timeout \\ :infinity, opts \\ []) do
     use_theories(server, Theory.file_args(path, args), timeout, opts)
@@ -113,8 +142,11 @@ defmodule IsabelleClient.Shared do
   @doc """
   Writes and checks a theory.
 
-  By default this uses the active client session. Pass `"session_id"` or
-  `:session_id` in the options to use another server session explicitly.
+  If `text` is not a complete theory, it is written as a theory importing
+  `Main` with the provided text starting on line 2 of the file. By default this
+  uses the active client session. Isabelle offsets are whole-file symbol offsets,
+  so the generated header contributes to reported offsets. Pass `"session_id"`
+  or `:session_id` in the options to use another server session explicitly.
   """
   def check_text(server, theory, text, opts \\ [], timeout \\ :infinity) do
     GenServer.call(server, {:check_text, theory, text, opts, timeout}, call_timeout(timeout))
@@ -148,18 +180,20 @@ defmodule IsabelleClient.Shared do
   end
 
   def handle_call({:async, :use_theories = action, args, timeout, opts}, from, state) do
-    with_session_args(state, args, fn state ->
+    require_session_args(state, args, fn state ->
       enqueue_async(state, from, action, args, timeout, opts)
     end)
   end
 
   def handle_call({:stop_session, timeout, opts}, from, state) do
-    with_session(state, fn %{client: client} = state ->
+    require_active_session(state, fn %{client: client} = state ->
+      session_id = Session.active_id(client)
+
       enqueue_async(
         state,
         from,
-        {:stop_session, client.session_id},
-        %{"session_id" => client.session_id},
+        {:stop_session, session_id},
+        %{"session_id" => session_id},
         timeout,
         opts
       )
@@ -180,15 +214,15 @@ defmodule IsabelleClient.Shared do
   end
 
   def handle_call({:purge_theories, args, timeout}, from, state) do
-    with_session_args(state, args, fn %{client: client} = state ->
-      {:ok, args} = Session.put_id(args, client.session_id)
+    require_session_args(state, args, fn %{client: client} = state ->
+      {:ok, args} = Session.put_id(args, Session.active_id(client))
 
       enqueue_command(state, from, "purge_theories", args, {:sync, timeout})
     end)
   end
 
   def handle_call({:check_text, theory, text, opts, timeout}, from, state) do
-    with_session_args(state, opts, fn %{client: client} = state ->
+    require_session_args(state, opts, fn %{client: client} = state ->
       opts = Arguments.normalize(opts)
       args = Theory.write_args(theory, text, opts, default_master_dir(client, opts))
 
@@ -235,7 +269,9 @@ defmodule IsabelleClient.Shared do
     args =
       args
       |> Arguments.normalize()
-      |> maybe_session_id(client.session_id, action)
+      |> maybe_session_id(Session.active_id(client), action)
+
+    {action, args} = prepare_async_action(action, args)
 
     enqueue_command(state, from, command_name(action), args, {:async, action, timeout, opts})
   end
@@ -320,14 +356,17 @@ defmodule IsabelleClient.Shared do
     end
   end
 
-  defp task_reply(:start_session, %Task{status: :finished, result: result} = task, client) do
-    session = Session.from_result(result)
-    client = %{client | session: session, session_id: session.id, tmp_dir: session.tmp_dir}
-    {{:ok, task}, client}
+  defp task_reply(
+         {:start_session, args, label},
+         %Task{status: :finished, result: result} = task,
+         client
+       ) do
+    session = Session.from_result(result, args, label)
+    {{:ok, task}, Session.push(client, session)}
   end
 
   defp task_reply({:stop_session, session_id}, task, client) do
-    {task_result(task), Session.clear_active(client, session_id)}
+    {task_result(task), Session.remove(client, session_id)}
   end
 
   defp task_reply(_action, task, client), do: {task_result(task), client}
@@ -341,16 +380,16 @@ defmodule IsabelleClient.Shared do
   defp finish_task(task, :failed, result, notes),
     do: %{task | status: :failed, result: result, notes: Enum.reverse(notes)}
 
-  defp with_session(%{client: %{session_id: nil}} = state, _fun),
+  defp require_active_session(%{client: %{sessions: []}} = state, _fun),
     do: {:reply, {:error, :no_session}, state}
 
-  defp with_session(state, fun), do: fun.(state)
+  defp require_active_session(state, fun), do: fun.(state)
 
-  defp with_session_args(%{client: %{session_id: nil}} = state, args, fun) do
+  defp require_session_args(%{client: %{sessions: []}} = state, args, fun) do
     if Session.has_id?(args), do: fun.(state), else: {:reply, {:error, :no_session}, state}
   end
 
-  defp with_session_args(state, _args, fun), do: fun.(state)
+  defp require_session_args(state, _args, fun), do: fun.(state)
 
   defp maybe_session_id(args, session_id, :use_theories) do
     {:ok, args} = Session.put_id(args, session_id)
@@ -359,17 +398,23 @@ defmodule IsabelleClient.Shared do
 
   defp maybe_session_id(args, _session_id, _action), do: args
 
+  defp prepare_async_action(:start_session, args) do
+    {args, label} = Session.prepare_start_args(args)
+    {{:start_session, args, label}, args}
+  end
+
+  defp prepare_async_action(action, args), do: {action, args}
+
   defp command_name(:build_session), do: "session_build"
-  defp command_name(:start_session), do: "session_start"
+  defp command_name({:start_session, _args, _label}), do: "session_start"
   defp command_name(:use_theories), do: "use_theories"
-  defp command_name(:stop_session), do: "session_stop"
   defp command_name({:stop_session, _session_id}), do: "session_stop"
 
   defp normalize_arg(nil), do: nil
   defp normalize_arg(arg), do: Arguments.normalize(arg)
 
   defp default_master_dir(client, opts),
-    do: Map.get(opts, "master_dir") || Session.default_master_dir(client, opts)
+    do: Map.get(opts, "master_dir") || Session.default_master_dir(Session.active(client), opts)
 
   defp command_timer({:sync, timeout}, ref), do: timer({:command_timeout, ref}, timeout)
 
@@ -409,9 +454,12 @@ defmodule IsabelleClient.Shared do
   end
 
   defp start_local(opts) do
-    case IsabelleClient.start(opts) do
-      {:ok, client, _task} -> {:ok, client}
-      {:error, _reason} = error -> error
+    with {:ok, server} <- IsabelleClient.start_server(opts),
+         {:ok, client} <-
+           IsabelleClient.connect(server,
+             timeout: Keyword.get(opts, :connect_timeout, Keyword.get(opts, :timeout, 30_000))
+           ) do
+      maybe_start_session(client, opts)
     end
   end
 

@@ -159,22 +159,33 @@ defmodule IsabelleProtocolTest do
           %{
             "node_name" => "node-1",
             "theory_name" => "Draft.One",
-            "status" => %{"ok" => true},
+            "status" => %{
+              "ok" => true,
+              "total" => 3,
+              "unprocessed" => 0,
+              "running" => 0,
+              "warned" => 1,
+              "failed" => 0,
+              "finished" => 3,
+              "canceled" => false,
+              "consolidated" => true,
+              "percentage" => 100
+            },
             "messages" => [
               %{
                 "message" => "line 1",
                 "kind" => "writeln",
-                "pos" => %{"line" => 1, "offset" => 10, "end_offset" => 15}
+                "pos" => %{"file" => "One.thy", "line" => 1, "offset" => 10, "end_offset" => 15}
               },
               %{
                 "message" => "line 2 early",
                 "kind" => "warning",
-                "pos" => %{"line" => 2, "offset" => 20, "end_offset" => 25}
+                "pos" => %{"file" => "One.thy", "line" => 2, "offset" => 20, "end_offset" => 25}
               },
               %{
                 "message" => "line 2 late",
                 "kind" => "writeln",
-                "pos" => %{"line" => 2, "offset" => 30, "end_offset" => 35}
+                "pos" => %{"file" => "One.thy", "line" => 2, "offset" => 30, "end_offset" => 35}
               }
             ],
             "exports" => [
@@ -184,13 +195,24 @@ defmodule IsabelleProtocolTest do
           %{
             "node_name" => "node-2",
             "theory_name" => "Draft.Two",
-            "status" => %{"ok" => false},
+            "status" => %{
+              "ok" => false,
+              "total" => 2,
+              "unprocessed" => 0,
+              "running" => 0,
+              "warned" => 0,
+              "failed" => 1,
+              "finished" => 1,
+              "canceled" => false,
+              "consolidated" => false,
+              "percentage" => 50
+            },
             "messages" => [
               %{"message" => "", "kind" => "writeln", "pos" => %{"line" => 2}},
               %{
                 "message" => "line 3",
                 "kind" => "error",
-                "pos" => %{"line" => 3, "offset" => 40, "end_offset" => 45}
+                "pos" => %{"file" => "Two.thy", "line" => 3, "offset" => 40, "end_offset" => 45}
               },
               %{"message" => "unpositioned", "kind" => "writeln"}
             ]
@@ -219,6 +241,16 @@ defmodule IsabelleProtocolTest do
 
     assert IsabelleClient.messages(task, line: 2, offset: 32) == ["line 2 late"]
     assert IsabelleClient.messages(task, line: 3, offset: 32) == []
+
+    assert IsabelleClient.messages(task, file: "One.thy") == [
+             "line 1",
+             "line 2 early",
+             "line 2 late"
+           ]
+
+    assert IsabelleClient.messages(task, file: ["Two.thy"]) == ["line 3"]
+    assert IsabelleClient.messages(task, file: "One.thy", line: 2, offset: 32) == ["line 2 late"]
+    assert IsabelleClient.messages(task, file: "Two.thy", line: 2) == []
     assert IsabelleClient.warnings(task, line: 2, offset: 22) == ["line 2 early"]
     assert IsabelleClient.errors(task) == ["top-level error", "line 3"]
     assert IsabelleClient.errors(task, offset: 42) == ["line 3"]
@@ -232,8 +264,19 @@ defmodule IsabelleProtocolTest do
     assert top_level.message == "top-level error"
     assert first.node_name == "node-1"
     assert first.theory_name == "Draft.One"
-    assert first.status == %{"ok" => true}
-    assert first.raw["node_name"] == "node-1"
+
+    assert first.status == %Result.NodeStatus{
+             ok: true,
+             total: 3,
+             unprocessed: 0,
+             running: 0,
+             warned: 1,
+             failed: 0,
+             finished: 3,
+             canceled: false,
+             consolidated: true,
+             percentage: 100
+           }
 
     assert IsabelleClient.nodes(task) == [first, second]
     assert IsabelleClient.node(task, "node-1") == first
@@ -247,8 +290,17 @@ defmodule IsabelleProtocolTest do
     assert IsabelleClient.errors(Result.decode(task)) == ["top-level error", "line 3"]
   end
 
-  test "extracts session ids from tasks and result maps" do
-    task = %Task{status: :finished, result: %{"session_id" => "session-123"}}
+  test "extracts session ids and session_start task messages" do
+    task = %Task{
+      status: :finished,
+      result: %{"session_id" => "session-123"},
+      notes: [
+        note("start-task", "writeln", "Started HOL", 1, 10),
+        note("start-task", "warning", "Session warning", 11, 20),
+        note("start-task", "error", "Session error", 21, 30),
+        %{"task" => "start-task", "kind" => "theory_progress", "theory" => "HOL"}
+      ]
+    }
 
     assert Result.extract_session(task) == "session-123"
     assert Result.extract_session(%Session{id: "session-123"}) == "session-123"
@@ -259,6 +311,58 @@ defmodule IsabelleProtocolTest do
     assert session["session_id"] == "session-123"
     assert session[:session_id] == "session-123"
     assert Result.extract_session(%{}) == nil
+
+    assert_notes(task, [
+      note("start-task", "writeln", "Started HOL", 1, 10),
+      note("start-task", "warning", "Session warning", 11, 20),
+      note("start-task", "error", "Session error", 21, 30)
+    ])
+
+    assert IsabelleClient.warnings(task) == ["Session warning"]
+    assert IsabelleClient.errors(task) == ["Session error"]
+    assert IsabelleClient.messages(task, file: "ROOT", line: 1, offset: 5) == ["Started HOL"]
+  end
+
+  test "decodes session_build results" do
+    result = %{
+      "ok" => true,
+      "return_code" => 0,
+      "sessions" => [
+        %{
+          "session" => "HOL",
+          "ok" => true,
+          "return_code" => 0,
+          "timeout" => false,
+          "timing" => %{"elapsed" => 1.0, "cpu" => 0.8, "gc" => 0.0}
+        }
+      ]
+    }
+
+    task = %Task{
+      status: :finished,
+      result: result,
+      notes: [
+        note("build-task", "writeln", "Building HOL", 10, 20),
+        %{"task" => "build-task", "kind" => "theory_progress", "theory" => "HOL"}
+      ]
+    }
+
+    assert %Result.SessionBuildResult{} = decoded = Result.decode(task)
+    assert decoded.ok == true
+    assert decoded.return_code == 0
+
+    assert [%Result.SessionBuildEntry{} = session] = decoded.sessions
+    assert session.session == "HOL"
+    assert session.ok == true
+    assert session.return_code == 0
+    assert session.timeout == false
+    assert session.timing == %{"elapsed" => 1.0, "cpu" => 0.8, "gc" => 0.0}
+
+    assert IsabelleClient.session_build_result(task) == decoded
+    assert IsabelleClient.session_build_result(%{}) == nil
+
+    assert_notes(task, [note("build-task", "writeln", "Building HOL", 10, 20)])
+    assert IsabelleClient.messages(task, file: "ROOT", line: 1, offset: 15) == ["Building HOL"]
   end
 
   test "normalizes keyword and atom-keyed Isabelle arguments" do
@@ -266,11 +370,13 @@ defmodule IsabelleProtocolTest do
              session: "HOL",
              dirs: ["src"],
              options: [threads: 4],
+             include_sessions: [],
              nested: [%{print_mode: ["ASCII"]}]
            ) == %{
              "session" => "HOL",
              "dirs" => ["src"],
              "options" => %{"threads" => 4},
+             "include_sessions" => [],
              "nested" => [%{"print_mode" => ["ASCII"]}]
            }
 
@@ -279,6 +385,9 @@ defmodule IsabelleProtocolTest do
 
     assert Session.put_id([], "active") == {:ok, %{"session_id" => "active"}}
     assert Session.put_id([], nil) == :error
+
+    assert Session.prepare_start_args(session: "HOL", label: "main", print_mode: ["ASCII"]) ==
+             {%{"session" => "HOL", "print_mode" => ["ASCII"]}, "main"}
   end
 
   test "prepares theory files and use_theories arguments" do
@@ -293,6 +402,35 @@ defmodule IsabelleProtocolTest do
            ) ==
              %{"master_dir" => dir, "theories" => ["Scratch.Example"]}
 
-    assert File.read!(Path.join(dir, "Example.thy")) =~ "theory Scratch.Example imports Main"
+    assert File.read!(Path.join(dir, "Example.thy")) ==
+             "theory Scratch.Example imports Main begin\nlemma \"x = x\"\n  by simp\nend\n"
+
+    assert Theory.source("Scratch.Preserved", "lemma True\n  by simp\n\n") ==
+             "theory Scratch.Preserved imports Main begin\nlemma True\n  by simp\n\nend\n"
+
+    complete_theory = """
+    theory CompleteExample imports Main begin
+
+    lemma True
+      by simp
+
+    end
+    """
+
+    assert Theory.source("IgnoredName", complete_theory) == complete_theory
+  end
+
+  defp note(task, kind, message, offset, end_offset) do
+    %{
+      "task" => task,
+      "kind" => kind,
+      "message" => message,
+      "pos" => %{"file" => "ROOT", "line" => 1, "offset" => offset, "end_offset" => end_offset}
+    }
+  end
+
+  defp assert_notes(task, notes) do
+    assert IsabelleClient.diagnostics(task) == notes
+    assert IsabelleClient.messages(task) == Enum.map(notes, & &1["message"])
   end
 end

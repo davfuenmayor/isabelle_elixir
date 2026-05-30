@@ -28,15 +28,14 @@ defmodule IsabelleClient.Result do
   defmodule Message do
     @moduledoc "Isabelle prover message."
 
-    defstruct [:kind, :message, :pos, raw: %{}]
+    defstruct [:kind, :message, :pos]
 
     @doc false
     def from_map(%{} = map) do
       %__MODULE__{
         kind: Map.get(map, "kind"),
         message: Map.get(map, "message"),
-        pos: IsabelleClient.Result.Position.from_map(Map.get(map, "pos")),
-        raw: map
+        pos: IsabelleClient.Result.Position.from_map(Map.get(map, "pos"))
       }
     end
   end
@@ -44,15 +43,49 @@ defmodule IsabelleClient.Result do
   defmodule Export do
     @moduledoc "Export produced by `use_theories`."
 
-    defstruct [:name, :base64, :body, raw: %{}]
+    defstruct [:name, :base64, :body]
 
     @doc false
     def from_map(%{} = map) do
       %__MODULE__{
         name: Map.get(map, "name"),
         base64: Map.get(map, "base64"),
-        body: Map.get(map, "body"),
-        raw: map
+        body: Map.get(map, "body")
+      }
+    end
+  end
+
+  defmodule NodeStatus do
+    @moduledoc "Status summary for one theory node."
+
+    defstruct [
+      :ok,
+      :total,
+      :unprocessed,
+      :running,
+      :warned,
+      :failed,
+      :finished,
+      :canceled,
+      :consolidated,
+      :percentage
+    ]
+
+    @doc false
+    def from_map(nil), do: nil
+
+    def from_map(%{} = map) do
+      %__MODULE__{
+        ok: Map.get(map, "ok"),
+        total: Map.get(map, "total"),
+        unprocessed: Map.get(map, "unprocessed"),
+        running: Map.get(map, "running"),
+        warned: Map.get(map, "warned"),
+        failed: Map.get(map, "failed"),
+        finished: Map.get(map, "finished"),
+        canceled: Map.get(map, "canceled"),
+        consolidated: Map.get(map, "consolidated"),
+        percentage: Map.get(map, "percentage")
       }
     end
   end
@@ -60,18 +93,17 @@ defmodule IsabelleClient.Result do
   defmodule Node do
     @moduledoc "One theory node in a `use_theories` result."
 
-    defstruct [:node_name, :theory_name, :status, messages: [], exports: [], raw: %{}]
+    defstruct [:node_name, :theory_name, :status, messages: [], exports: []]
 
     @doc false
     def from_map(%{} = map) do
       %__MODULE__{
         node_name: Map.get(map, "node_name"),
         theory_name: Map.get(map, "theory_name"),
-        status: Map.get(map, "status"),
+        status: IsabelleClient.Result.NodeStatus.from_map(Map.get(map, "status")),
         messages:
           Enum.map(Map.get(map, "messages", []), &IsabelleClient.Result.Message.from_map/1),
-        exports: Enum.map(Map.get(map, "exports", []), &IsabelleClient.Result.Export.from_map/1),
-        raw: map
+        exports: Enum.map(Map.get(map, "exports", []), &IsabelleClient.Result.Export.from_map/1)
       }
     end
   end
@@ -79,15 +111,46 @@ defmodule IsabelleClient.Result do
   defmodule UseTheoriesResult do
     @moduledoc "Structured `use_theories` result."
 
-    defstruct [:ok, errors: [], nodes: [], raw: %{}]
+    defstruct [:ok, errors: [], nodes: []]
 
     @doc false
     def from_map(%{"nodes" => nodes} = map) when is_list(nodes) do
       %__MODULE__{
         ok: Map.get(map, "ok"),
         errors: Enum.map(Map.get(map, "errors", []), &IsabelleClient.Result.Message.from_map/1),
-        nodes: Enum.map(nodes, &IsabelleClient.Result.Node.from_map/1),
-        raw: map
+        nodes: Enum.map(nodes, &IsabelleClient.Result.Node.from_map/1)
+      }
+    end
+  end
+
+  defmodule SessionBuildEntry do
+    @moduledoc "One session entry in a `session_build` result."
+
+    defstruct [:session, :ok, :return_code, :timeout, :timing]
+
+    @doc false
+    def from_map(%{} = map) do
+      %__MODULE__{
+        session: Map.get(map, "session"),
+        ok: Map.get(map, "ok"),
+        return_code: Map.get(map, "return_code"),
+        timeout: Map.get(map, "timeout"),
+        timing: Map.get(map, "timing")
+      }
+    end
+  end
+
+  defmodule SessionBuildResult do
+    @moduledoc "Structured `session_build` result."
+
+    defstruct [:ok, :return_code, sessions: []]
+
+    @doc false
+    def from_map(%{"sessions" => sessions} = map) when is_list(sessions) do
+      %__MODULE__{
+        ok: Map.get(map, "ok"),
+        return_code: Map.get(map, "return_code"),
+        sessions: Enum.map(sessions, &IsabelleClient.Result.SessionBuildEntry.from_map/1)
       }
     end
   end
@@ -98,16 +161,33 @@ defmodule IsabelleClient.Result do
   def extract_session(%{"session_id" => session_id}) when is_binary(session_id), do: session_id
   def extract_session(_), do: nil
 
-  @doc "Returns a typed representation of common Isabelle server results."
+  @doc """
+  Returns a typed representation of common Isabelle server results.
+
+  Recognizes `session_start`, `session_build`, and `use_theories` result shapes.
+  Unknown shapes are returned unchanged.
+  """
   def decode(%Task{result: result}), do: decode(result)
   def decode(%{"session_id" => _} = result), do: Session.from_result(result)
+
+  def decode(%{"sessions" => sessions} = result) when is_list(sessions),
+    do: SessionBuildResult.from_map(result)
 
   def decode(%{"nodes" => nodes} = result) when is_list(nodes),
     do: UseTheoriesResult.from_map(result)
 
   def decode(result), do: result
 
-  @doc "Returns a structured `use_theories` result, or `nil` for another result shape."
+  @doc "Decodes a `session_build` result or task, or returns `nil` for another shape."
+  def session_build_result(%SessionBuildResult{} = result), do: result
+  def session_build_result(%Task{result: result}), do: session_build_result(result)
+
+  def session_build_result(%{"sessions" => sessions} = result) when is_list(sessions),
+    do: SessionBuildResult.from_map(result)
+
+  def session_build_result(_), do: nil
+
+  @doc "Decodes a `use_theories` result or task, or returns `nil` for another shape."
   def use_theories_result(%UseTheoriesResult{} = result), do: result
   def use_theories_result(%Task{result: result}), do: use_theories_result(result)
 
@@ -147,18 +227,27 @@ defmodule IsabelleClient.Result do
   end
 
   @doc """
-  Returns diagnostic messages from a `use_theories` task or result.
+  Returns diagnostic messages from a task, result, or task notes.
+
+  This works for `use_theories` final results and for message-shaped task notes
+  produced by async commands such as `session_build` and `session_start`.
 
   Pass `line: n`, `line: first..last`, or `line: [n, ...]` to keep only
   diagnostics whose position has that source line. Pass `offset: n` to keep
   only diagnostics whose `pos.offset..pos.end_offset` range contains `n`.
+  Pass `file: path` or `file: [path, ...]` to keep only diagnostics whose
+  position has that file.
+  Offsets are Isabelle symbol offsets from the beginning of the whole source
+  file, not columns within the line.
 
   Raw result maps return raw diagnostic maps; structured results return typed
   `%IsabelleClient.Result.Message{}` values.
   """
   def diagnostics(result, opts \\ [])
 
-  def diagnostics(%Task{result: result}, opts), do: diagnostics(result, opts)
+  def diagnostics(%Task{result: result, notes: notes}, opts),
+    do: diagnostics(result, opts) ++ diagnostics(notes, opts)
+
   def diagnostics(%UseTheoriesResult{nodes: nodes}, opts), do: diagnostics_from_nodes(nodes, opts)
 
   def diagnostics(%{"nodes" => nodes}, opts) when is_list(nodes) do
@@ -166,9 +255,22 @@ defmodule IsabelleClient.Result do
     |> filter_diagnostics(opts)
   end
 
+  def diagnostics(%{"message" => _} = diagnostic, opts),
+    do: filter_diagnostics([diagnostic], opts)
+
+  def diagnostics(diagnostics, opts) when is_list(diagnostics) do
+    diagnostics
+    |> Enum.filter(&diagnostic?/1)
+    |> filter_diagnostics(opts)
+  end
+
   def diagnostics(_, _opts), do: []
 
-  @doc "Returns user-facing messages from a `use_theories` task or result map."
+  @doc """
+  Returns user-facing message strings from a task, result map, or task notes.
+
+  Accepts the same `:file`, `:line`, and `:offset` filters as `diagnostics/2`.
+  """
   def messages(result, opts \\ []) do
     result
     |> diagnostics(opts)
@@ -176,38 +278,28 @@ defmodule IsabelleClient.Result do
   end
 
   @doc """
-  Returns error messages from a `use_theories` task or result map.
+  Returns error messages from a task or result map.
 
   This includes Isabelle's cumulative top-level `"errors"` list and node-level
-  diagnostics whose kind is `"error"`.
+  or note diagnostics whose kind is `"error"`.
   """
-  def errors(result, opts \\ [])
+  def errors(result, opts \\ []), do: result |> error_diagnostics() |> format(opts)
 
-  def errors(%Task{result: result}, opts), do: errors(result, opts)
-
-  def errors(%UseTheoriesResult{} = result, opts),
-    do: result |> error_diagnostics() |> format(opts)
-
-  def errors(%{} = result, opts), do: result |> error_diagnostics() |> format(opts)
-
-  def errors(_result, _opts), do: []
-
-  @doc "Returns warning messages from a `use_theories` task or result map."
-  def warnings(result, opts \\ []), do: messages_by_kind(result, "warning", opts)
-
-  defp messages_by_kind(result, kind, opts) do
+  @doc "Returns warning messages from a task or result map, with optional position filters."
+  def warnings(result, opts \\ []) do
     result
-    |> diagnostics(opts)
-    |> Enum.filter(&(message_kind(&1) == kind))
+    |> diagnostics_by_kind("warning", opts)
     |> message_texts()
   end
 
-  defp error_diagnostics(%UseTheoriesResult{} = result), do: result.errors ++ node_errors(result)
+  defp error_diagnostics(result),
+    do: top_level_errors(result) ++ diagnostics_by_kind(result, "error")
 
-  defp error_diagnostics(%{} = result),
-    do: (Map.get(result, "errors", []) || []) ++ node_errors(result)
-
-  defp node_errors(result), do: Enum.filter(diagnostics(result), &(message_kind(&1) == "error"))
+  defp diagnostics_by_kind(result, kind, opts \\ []) do
+    result
+    |> diagnostics(opts)
+    |> Enum.filter(&(message_kind(&1) == kind))
+  end
 
   defp format(diagnostics, opts), do: diagnostics |> filter_diagnostics(opts) |> message_texts()
 
@@ -220,10 +312,25 @@ defmodule IsabelleClient.Result do
   defp filter_diagnostics(diagnostics, opts),
     do: Enum.filter(diagnostics, &diagnostic_matches?(&1, opts))
 
+  defp diagnostic?(%Message{}), do: true
+  defp diagnostic?(%{"message" => _}), do: true
+  defp diagnostic?(_), do: false
+
   defp diagnostic_matches?(diagnostic, opts) do
-    line_matches?(line_number(diagnostic), Keyword.get(opts, :line)) and
+    file_matches?(file_name(diagnostic), Keyword.get(opts, :file)) and
+      line_matches?(line_number(diagnostic), Keyword.get(opts, :line)) and
       offset_matches?(message_pos(diagnostic), Keyword.get(opts, :offset))
   end
+
+  defp file_name(%Message{pos: %Position{file: file}}), do: file
+  defp file_name(%{"pos" => %{"file" => file}}), do: file
+  defp file_name(_), do: nil
+
+  defp file_matches?(_file, nil), do: true
+  defp file_matches?(nil, _wanted), do: false
+  defp file_matches?(file, wanted) when is_binary(wanted), do: file == wanted
+  defp file_matches?(file, wanted) when is_list(wanted), do: file in wanted
+  defp file_matches?(_file, _wanted), do: false
 
   defp line_number(%Message{pos: %Position{line: line}}), do: line
   defp line_number(%{"pos" => %{"line" => line}}), do: line

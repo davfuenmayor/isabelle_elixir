@@ -172,7 +172,7 @@ defmodule IsabelleClient.SharedTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      assert %Session{id: first_id} = first_session = IsabelleClient.session(first_task)
+      assert %Session{id: first_id} = first_session = Session.from_result(first_task.result)
 
       assert {:ok, %IsabelleTask{status: :finished} = second_task} =
                Shared.start_session(
@@ -181,7 +181,7 @@ defmodule IsabelleClient.SharedTest do
                  IsabelleTestSupport.session_timeout()
                )
 
-      assert %Session{id: second_id} = second_session = IsabelleClient.session(second_task)
+      assert %Session{id: second_id} = second_session = Session.from_result(second_task.result)
       assert first_id != second_id
 
       first_dir =

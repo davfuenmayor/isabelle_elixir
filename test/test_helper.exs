@@ -21,7 +21,7 @@ defmodule IsabelleTestSupport do
   def with_server(test, fun) do
     if isabelle_available?() do
       name = "elixir_test_#{test}_#{System.unique_integer([:positive])}"
-      {:ok, [server]} = IsabelleClient.Raw.new_server(name, 0)
+      {:ok, server} = IsabelleClient.Raw.new_server(name, 0)
 
       try do
         fun.(server)

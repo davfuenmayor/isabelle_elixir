@@ -30,14 +30,7 @@ defmodule IsabelleClient.Theory do
     if Regex.match?(~r/\A\s*theory\s+/u, text) do
       text
     else
-      """
-      theory #{theory} imports #{imports}
-      begin
-
-      #{text}
-
-      end
-      """
+      "theory #{theory} imports #{imports} begin\n#{text}#{end_separator(text)}end\n"
     end
   end
 
@@ -46,5 +39,9 @@ defmodule IsabelleClient.Theory do
     |> String.split(".")
     |> List.last()
     |> Kernel.<>(".thy")
+  end
+
+  defp end_separator(text) do
+    if String.ends_with?(text, "\n"), do: "", else: "\n"
   end
 end

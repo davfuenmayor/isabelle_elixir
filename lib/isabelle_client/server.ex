@@ -15,6 +15,7 @@ defmodule IsabelleClient.Server do
 
     defstruct [:name, :host, :port, :password]
 
+    @typedoc "Connection details printed by Isabelle's resident server."
     @type t :: %__MODULE__{
             name: String.t(),
             host: String.t(),
@@ -33,7 +34,7 @@ defmodule IsabelleClient.Server do
     def fetch(%__MODULE__{}, _key), do: :error
   end
 
-  @doc "Starts a local resident Isabelle server."
+  @doc "Starts a local resident Isabelle server and returns its connection info."
   def start(name \\ @default_name, port \\ @default_port) do
     with {:ok, exe} <- executable() do
       port =
@@ -44,7 +45,7 @@ defmodule IsabelleClient.Server do
 
       result =
         receive do
-          {^port, {:data, data}} -> {:ok, parse_info(data)}
+          {^port, {:data, data}} -> parse_started(data)
         after
           @timeout -> {:error, :timeout}
         end
@@ -89,6 +90,14 @@ defmodule IsabelleClient.Server do
         password: info["password"]
       }
     end)
+  end
+
+  defp parse_started(data) do
+    case parse_info(data) do
+      [server] -> {:ok, server}
+      [] -> {:error, %{message: "could not parse Isabelle server output", output: data}}
+      servers -> {:error, %{message: "expected one Isabelle server", servers: servers}}
+    end
   end
 
   @doc """

@@ -40,15 +40,13 @@ defmodule IsabelleClient.Protocol do
   def parse(raw, length \\ nil) when is_binary(raw) do
     {name, body} = split_name(raw)
 
-    cond do
-      name == "" ->
-        {:error, {:malformed_response, raw}}
-
-      true ->
-        with {:ok, type} <- response_type(name),
-             {:ok, decoded} <- decode_body(body) do
-          {:ok, %Response{type: type, body: decoded, raw: raw, length: length}}
-        end
+    if name == "" do
+      {:error, {:malformed_response, raw}}
+    else
+      with {:ok, type} <- response_type(name),
+           {:ok, decoded} <- decode_body(body) do
+        {:ok, %Response{type: type, body: decoded, raw: raw, length: length}}
+      end
     end
   end
 
