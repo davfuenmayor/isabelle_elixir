@@ -1,0 +1,406 @@
+# Unification and Matching
+
+## Intro
+
+This notebook showcases Isabelle unification functionalities from Elixir.
+We can send ordinary Isabelle theory text (unicode supported) such as:
+
+```isabelle
+unification pattern_unify "λx::i. (?F x :: i)" "λx::i. f (g x)"
+```
+
+and the checked theory returns the computed assignments as Isabelle output
+messages.
+
+Behind the scenes, the command `unification` is defined in a small Isabelle
+support session:
+
+* `priv/isabelle/unification/ROOT` declares the session `IsabelleElixirUnification`
+* `priv/isabelle/unification/Unification.thy` contains the Isabelle/ML
+  wrappers around Isabelle's internal unification and matching functionality.
+
+<!-- livebook:{"break_markdown":true} -->
+
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
+
+```elixir
+Mix.install([
+  {:isabelle_elixir, path: Path.expand("..", __DIR__)}
+])
+```
+
+## Start Isabelle
+
+```elixir
+#System.put_env("ISABELLE_TOOL", "path/to/isabelle/executable") # optionally, if needed
+IsabelleClient.Server.executable()
+```
+
+```elixir
+{:ok, server} =
+  IsabelleClient.start_server(
+    server_name: "livebook_unification_#{System.unique_integer([:positive])}"
+  )
+
+{:ok, client} = IsabelleClient.connect(server)
+```
+
+## Start Session
+
+The examples below import the session-qualified theory
+`IsabelleElixirUnification.Unification`. The three names are kept explicit:
+
+* `unification_root`: directory containing the `ROOT` file
+* `unification_session`: session name declared by that `ROOT`
+* `unification_import`: theory imported by each generated `check_text` invocation
+
+The final section also imports the TPTP/THF notation theory, so we make that
+session visible from the same Isabelle session.
+
+```elixir
+unification_root = Path.expand("../priv/isabelle/unification", __DIR__)
+unification_session = "IsabelleElixirUnification"
+unification_import = "IsabelleElixirUnification.Unification"
+tptp_root = Path.expand("../priv/isabelle/tptp", __DIR__)
+tptp_session = "IsabelleElixirTPTP"
+tptp_import = "IsabelleElixirTPTP.TPTP"
+
+%{
+  root: unification_root,
+  tptp_root: tptp_root,
+  session: unification_session,
+  included_session: tptp_session,
+  import: unification_import,
+  tptp_import: tptp_import,
+  files: File.ls!(unification_root),
+  tptp_files: File.ls!(tptp_root)
+}
+```
+
+```elixir
+{:ok, client, start_task} =
+  IsabelleClient.start_session(
+    client,
+    [
+      session: unification_session,
+      dirs: [unification_root, tptp_root],
+      include_sessions: [tptp_session],
+      verbose: true
+    ],
+    120_000
+  )
+
+%{
+  session_id: IsabelleClient.active_session(client).id,
+  messages: IsabelleClient.messages(start_task)
+}
+```
+
+## Helper Module
+
+```elixir
+defmodule Unification do
+  import IsabelleClient
+
+  defp output?(message) do
+    not (String.starts_with?(message, "theory ") or
+           String.starts_with?(message, "Loading ") or
+           String.starts_with?(message, "consts\n  thf_app") or
+           String.starts_with?(message, "val protected =") or
+           message in ["bundle from_TPTP", "bundle to_TPTP"])
+  end
+
+  def check(client, import_name, theory_name, body) do
+    {:ok, task} = check_text(client, theory_name, body, [imports: import_name, unicode_symbols: true], 60_000)
+    messages = task |> messages() |> Enum.filter(&output?/1)
+    errors = errors(task)
+
+    if errors == [], do: Enum.join(messages, "\n\n"), else: %{ok?: task.result["ok"], messages: messages, errors: errors}
+  end
+end
+```
+
+Every example below sends a small Isabelle command string through the `isabelle_elixir` API function `check_text`. The wrapper
+`Unification.check` only filters out routine theory-progress messages; the
+remaining messages are produced by Isabelle itself.
+
+```elixir
+Unification.check(client, unification_import, "RawPatternUnify", ~S"""
+typedecl i
+consts f :: "i => i"
+consts g :: "i ⇒ i" (* unicode supported *)
+
+unification pattern_unify "λx::i. (?F x :: i)" "λx::i. f (g x)"
+""")
+|> IO.puts()
+```
+
+<!-- livebook:{"branch_parent_index":3} -->
+
+## Type Unification and Matching
+
+`type_unify` is type-unification: equation-solving over types. It invokes Isabelle's `Sign.typ_unify` under the hood.
+
+```elixir
+left_type = "('a list ⇒ j) ⇒ 'a list"
+right_type = "(i list ⇒ 'b) ⇒ i list"
+
+Unification.check(client, unification_import, "TypeUnify", """
+typedecl i
+typedecl j
+
+unification type_unify ‹#{left_type}› ‹#{right_type}›
+""")
+|> IO.puts()
+```
+
+`type_match` is one-way type matching. Variables in the first type are
+instantiated to make it match the second type. It invokes Isabelle's `Sign.typ_match` under the hood.
+
+```elixir
+type_pattern = "'b ⇒ 'a list"
+type_object = "(i ⇒ j) ⇒ i list"
+
+Unification.check(client, unification_import, "TypeMatch", """
+typedecl i
+typedecl j
+
+unification type_match ‹#{type_pattern}› ‹#{type_object}›
+""")
+|> IO.puts()
+```
+
+<!-- livebook:{"branch_parent_index":3} -->
+
+## Higher-Order Pattern Unification and Matching
+
+`pattern_unify` relies on Isabelle's `Pattern.unify`, a deterministic higher-order pattern unifier.
+
+```elixir
+left_term = "λx::i. ?F x"
+right_term = "\\<lambda>x::i. f (g x)" # unicode input is optional
+
+Unification.check(client, unification_import, "PatternUnify", """
+typedecl i
+consts f :: "i ⇒ i"
+consts g :: "i => i"
+
+unification pattern_unify ‹#{left_term}› ‹#{right_term}›
+""")
+|> IO.puts()
+```
+
+The command reports fragment failures as messages instead of crashing. Here
+`?F` is applied to the same bound variable twice, so it is not a higher-order
+pattern.
+
+```elixir
+left_term = "λx::i. (?F x x :: i)"
+right_term = "λx::i. f x"
+
+Unification.check(client, unification_import, "PatternFragmentFailure", """
+typedecl i
+consts f :: "i ⇒ i"
+
+unification pattern_unify ‹#{left_term}› ‹#{right_term}›
+""")
+|> IO.puts()
+```
+
+`pattern_match` instantiates variables in the first term to match the second, by invoking Isabelle's `Pattern.match`.
+
+```elixir
+pattern = "h ?x (f ?y)"
+object = "h a (f b)"
+
+Unification.check(client, unification_import, "PatternMatch", """
+typedecl i
+consts a :: i
+consts b :: i
+consts f :: "i ⇒ i"
+consts h :: "i ⇒ i ⇒ i"
+
+unification pattern_match ‹#{pattern}› ‹#{object}›
+""")
+|> IO.puts()
+```
+
+Use `pattern_matches` for a boolean answer.
+
+```elixir
+pattern = "h ?x (f ?y)"
+object = "h a (f b)"
+
+Unification.check(client, unification_import, "PatternMatches", """
+typedecl i
+consts a :: i
+consts b :: i
+consts f :: "i ⇒ i"
+consts h :: "i ⇒ i ⇒ i"
+
+unification pattern_matches ‹#{pattern}› ‹#{object}›
+""")
+|> IO.puts()
+```
+
+`pattern_rewrite` takes three arguments: target term, rewrite left-hand side,
+and rewrite right-hand side. It uses Isabelle's `Pattern.match_rew` under the hood.
+
+```elixir
+target = "h a (f b)"
+lhs = "h ?x (f ?y)"
+rhs = "h ?y (f ?x)"
+
+Unification.check(client, unification_import, "PatternRewrite", """
+typedecl i
+consts a :: i
+consts b :: i
+consts f :: "i ⇒ i"
+consts h :: "i ⇒ i ⇒ i"
+
+unification pattern_rewrite ‹#{target}› ‹#{lhs}› ‹#{rhs}›
+""")
+|> IO.puts()
+```
+
+<!-- livebook:{"branch_parent_index":3} -->
+
+## Higher-Order (Pre-)Unification and Matching
+
+`unifiers` relies on Isabelle's `Unify.unifiers` as a general higher-order preunification procedure. Unlike `Pattern.unify`, it can search beyond the higher-order pattern fragment. In this
+example `?F` is applied to the same bound variable twice, so it is not a pattern problem, but preunification still finds solutions.
+
+```elixir
+left_term = "λx::i. (?F x x :: i)"
+right_term = "λx::i. f x"
+
+Unification.check(client, unification_import, "PreunifiersBeyondPattern", """
+typedecl i
+consts f :: "i ⇒ i"
+
+unification unifiers ‹#{left_term}› ‹#{right_term}›
+""")
+|> IO.puts()
+```
+
+Here is a case where `Unify.unifiers` deliberately preserves an unresolved
+flex-flex pair.
+
+```elixir
+left_term = "λx::i. (?F x :: i)"
+right_term = "λx::i. (?F (f x) :: i)"
+
+Unification.check(client, unification_import, "FlexFlexPreunifiers", """
+typedecl i
+consts f :: "i ⇒ i"
+
+unification unifiers ‹#{left_term}› ‹#{right_term}›
+""")
+|> IO.puts()
+```
+
+`smash_unifiers` relies on Isabelle's `Unify.smash_unifiers`, which additionally takes any remaining flex-flex pairs and applies a trivial substitution, so the result has no separate flex-flex output.
+
+```elixir
+left_term = "λx::i. (?F x :: i)"
+right_term = "λx::i. (?F (f x) :: i)"
+
+Unification.check(client, unification_import, "SmashedFlexFlexPreunifiers", """
+typedecl i
+consts f :: "i ⇒ i"
+
+unification smash_unifiers ‹#{left_term}› ‹#{right_term}›
+""")
+|> IO.puts()
+```
+
+`matchers` builds upon Isabelle's `Unify.matchers`, which does (one-way) higher-order matching. It returns all matchers.
+
+```elixir
+pattern = "λx::i. (?F x :: i)"
+object = "λx::i. f (g x)"
+
+Unification.check(client, unification_import, "Matchers", """
+typedecl i
+consts f :: "i ⇒ i"
+consts g :: "i ⇒ i"
+
+unification matchers ‹#{pattern}› ‹#{object}›
+""")
+|> IO.puts()
+```
+
+`matcher` builds upon Isabelle's `Unify.matcher`, which is a convenience wrapper for matching two term lists that returns the first matcher, if one exists.
+
+```elixir
+pattern = "λx::i. (?F x :: i)"
+object = "λx::i. f (g x)"
+
+Unification.check(client, unification_import, "Matcher", """
+typedecl i
+consts f :: "i ⇒ i"
+consts g :: "i ⇒ i"
+
+unification matcher ‹#{pattern}› ‹#{object}›
+""")
+|> IO.puts()
+```
+
+<!-- livebook:{"branch_parent_index":3} -->
+
+## TPTP/THF Syntax
+
+This repeats the first higher-order preunification example, but the input term
+is written with the bundled THF notation from `IsabelleElixirTPTP.TPTP`.
+
+Here `^ [x : $i] : ...` is THF-style lambda syntax and `$i` is the TPTP
+individual type. Application is left implicit as `?F x x` and `f x`: in this
+support theory, explicit `@` is the Isabelle constant `thf_app`, so using
+`?F @ x @ x` would change the raw unification problem.
+
+```elixir
+thf_import = "#{unification_import} #{tptp_import}"
+
+Unification.check(client, thf_import, "THFPreunifiersBeyondPattern", ~S"""
+unbundle from_TPTP
+unbundle no to_TPTP
+declare [[show_thf_app = false]]
+
+consts f :: "$i > $i"
+
+unification unifiers "^ [x : $i] : (?F x x : $i)" "^ [x : $i] : f x"
+""")
+|> IO.puts()
+```
+
+We can also have output in TPTP/THF-like syntax:
+
+```elixir
+thf_import = "#{unification_import} #{tptp_import}"
+
+Unification.check(client, thf_import, "THFPreunifiersBeyondPattern", ~S"""
+unbundle from_TPTP
+unbundle to_TPTP
+declare [[show_thf_app = true]]
+
+consts f :: "$i > $i"
+
+unification unifiers "^ [x : $i] : (?F x x : $i)" "^ [x : $i] : f x"
+""")
+|> IO.puts()
+```
+
+## Stop the Session and Shutdown
+
+```elixir
+{:ok, client, stop_task} = IsabelleClient.stop_session(client, 120_000)
+
+%{
+  remaining_sessions: client.sessions,
+  messages: IsabelleClient.messages(stop_task)
+}
+```
+
+```elixir
+IsabelleClient.shutdown_server(client)
+```

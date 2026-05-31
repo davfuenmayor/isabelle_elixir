@@ -1,11 +1,11 @@
-# IsabelleClient.Raw
+# Raw Client
 
 ## Intro
 
 This notebook uses `IsabelleClient.Raw`. It exposes the TCP socket, keeps no
 session state, and leaves async task waiting explicit. It also exposes some basic server management functionality.
 
-Read `IsabelleClient.livemd` first if you are new to the library. The raw API is
+Read `Client.livemd` first if you are new to the library. The raw API is
 useful when you want to see or control the Isabelle server protocol directly:
 you send a command, receive a task id, then wait for the task yourself.
 

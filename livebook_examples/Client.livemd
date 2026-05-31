@@ -1,4 +1,4 @@
-# IsabelleClient
+# Client
 
 ## Intro
 
@@ -8,9 +8,9 @@ helpers for checking text or files.
 
 Start here if you are learning the library. The other notebooks build on this one:
 
-* `IsabelleClientShared.livemd` is for sharing one connection across many
+* `ClientShared.livemd` is for sharing one connection across many
   Elixir processes
-* `IsabelleClientRaw.livemd` is for protocol-level control with raw sockets
+* `ClientRaw.livemd` is for protocol-level control with raw sockets
 
 <!-- livebook:{"break_markdown":true} -->
 

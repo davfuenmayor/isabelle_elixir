@@ -1,0 +1,7 @@
+(* Session descriptor for the Livebook support theory.
+   Isabelle sessions are discovered from ROOT files in directories passed via
+   session_start `dirs`. *)
+session "IsabelleElixirUnification" = "HOL" +
+  options [document = false]
+  theories
+    Unification

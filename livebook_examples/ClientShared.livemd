@@ -1,4 +1,4 @@
-# IsabelleClient.Shared
+# Shared Client
 
 ## Intro
 
@@ -6,7 +6,7 @@
 in a `GenServer`, so many Elixir processes can share one Isabelle connection
 without racing on socket reads.
 
-Read `IsabelleClient.livemd` first if you are new to the library. This notebook
+Read `Client.livemd` first if you are new to the library. This notebook
 focuses on the extra coordination needed once multiple Elixir processes use one
 Isabelle connection.
 

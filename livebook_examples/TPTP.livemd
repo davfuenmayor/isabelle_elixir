@@ -1,0 +1,295 @@
+# TPTP/THF Syntax and Pretty-Printing
+
+## Intro
+
+This notebook showcases the bundled [TPTP/THF-style notation](https://page.mi.fu-berlin.de/cbenzmueller/papers/C25.pdf) for higher-order logic.
+Livebook sends ordinary Isabelle theory text through `check_text`; the support
+theory provides syntax bundles for parsing and printing THF-like formulas.
+
+Behind the scenes:
+
+* `priv/isabelle/tptp/ROOT` declares the session `IsabelleElixirTPTP`
+* `priv/isabelle/tptp/TPTP.thy` defines the THF notation bundles and the
+  explicit application operator `@`
+
+This is not a parser for full annotated TPTP problem files like
+`thf(name, role, formula).` It is a lightweight bridge for writing Isabelle
+theories with THF-style syntax and inspecting THF-style pretty output.
+
+In particular, we deviate from the THF "standard" in allowing untyped terms, ML-style schematic type variables (as in `'a > 'b`) instead of type quantifiers (which are not supported), and the infix application operator `@` can be omitted (optionally).
+
+<!-- livebook:{"break_markdown":true} -->
+
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
+
+```elixir
+Mix.install([
+  {:isabelle_elixir, path: Path.expand("..", __DIR__)}
+])
+```
+
+## Start Isabelle
+
+```elixir
+#System.put_env("ISABELLE_TOOL", "path/to/isabelle/executable") # optionally, if needed
+IsabelleClient.Server.executable()
+```
+
+```elixir
+{:ok, server} =
+  IsabelleClient.start_server(
+    server_name: "livebook_tptp_#{System.unique_integer([:positive])}"
+  )
+
+{:ok, client} = IsabelleClient.connect(server)
+```
+
+## Start the Session
+
+```elixir
+tptp_root = Path.expand("../priv/isabelle/tptp", __DIR__)
+tptp_session = "IsabelleElixirTPTP"
+tptp_import = "IsabelleElixirTPTP.TPTP"
+
+%{
+  root: tptp_root,
+  session: tptp_session,
+  import: tptp_import,
+  files: File.ls!(tptp_root)
+}
+```
+
+```elixir
+{:ok, client, start_task} =
+  IsabelleClient.start_session(
+    client,
+    [session: tptp_session, dirs: [tptp_root], verbose: true],
+    120_000
+  )
+
+%{
+  session_id: IsabelleClient.active_session(client).id,
+  messages: IsabelleClient.messages(start_task)
+}
+```
+
+## Helper Module
+
+One helper: check a small Isabelle theory body and show relevant messages.
+The `from:`, `to:`, and `show_thf_app:` options keep the examples focused on
+the problem text: the helper activates the corresponding Isabelle notation
+before the body and deactivates it afterwards.
+
+```elixir
+defmodule TPTP do
+  import IsabelleClient
+
+  # Activate THF input/output syntax around the user-provided theory fragment.
+  defp enable(opts) do
+    [
+      opts[:from] && "unbundle from_TPTP",
+      opts[:to] && "unbundle to_TPTP",
+      Keyword.has_key?(opts, :show_thf_app) && "declare [[show_thf_app = #{opts[:show_thf_app]}]]"
+    ]
+    |> Enum.filter(& &1)
+    |> Enum.join("\n")
+  end
+
+  # Restore notation after each example so cells remain independent.
+  defp disable(opts) do
+    [
+      Keyword.has_key?(opts, :show_thf_app) && "declare [[show_thf_app = false]]",
+      opts[:to] && "unbundle no to_TPTP",
+      opts[:from] && "unbundle no from_TPTP"
+    ]
+    |> Enum.filter(& &1)
+    |> Enum.join("\n")
+  end
+
+  defp output?(message) do
+    not (String.starts_with?(message, "theory ") or
+           message in ["bundle from_TPTP", "bundle to_TPTP"])
+  end
+  
+  def check(client, import_name, theory_name, body, opts \\ []) do
+    # The wrapper is ordinary Isabelle text; check_text writes it to a temporary
+    # theory and asks Isabelle to process that theory (we activate unicode output).
+    body = Enum.join([enable(opts), body, disable(opts)], "\n\n")
+    timeout = Keyword.get(opts, :timeout, 20_000)
+    {:ok, task} = check_text(client, theory_name, body, [imports: import_name, unicode_symbols: true], timeout)
+    messages = task |> messages() |> Enum.filter(&output?/1)
+    errors = errors(task)
+
+    if errors == [], do: Enum.join(messages, "\n\n"), else: %{ok?: task.result["ok"], messages: messages, errors: errors}
+  end
+end
+```
+
+## From TPTP to Isabelle
+
+The `check` function invokes `IsabelleClient.check_text` under the hood, which takes a client, an import statement, and the theory body. Additionally, the option `from: true` wraps the body in
+`unbundle from_TPTP ... unbundle no from_TPTP`, in order to activate the TPTP -> Isabelle translation (and deactivate it afterwards). The option `show_thf_app: false` deactivates the explicit infix application notation `@` (which is mostly useful for the Isabelle -> TPTP direction).
+
+```elixir
+TPTP.check(client, tptp_import, "TPTPSyllogism", ~S"""
+typedecl entity
+consts human :: "entity > $o"
+consts mortal :: "entity > $o"
+consts socrates :: entity
+
+lemma mortal_socrates:
+  "(! [x::entity] : (human @ x) => (mortal @ x))
+    => (human @ socrates)
+    => (mortal @ socrates)"
+  unfolding thf_app_def
+  by blast
+""", from: true, show_thf_app: false)
+|> IO.puts()
+```
+
+Characteristic functions give a compact encoding of sets. This example defines
+union with THF notation and proves commutativity.
+
+```elixir
+TPTP.check(client, tptp_import, "TPTPSetUnion", ~S"""
+typedecl elem
+type_synonym eset = "elem > $o"
+
+definition union :: "eset > eset > eset" where
+  "union = (^ [A::eset, B::eset, x::elem] : (A @ x) | (B @ x))"
+
+lemma union_comm:
+  "! [A::eset, B::eset, x::elem] :
+      ((union @ A @ B @ x) <=> (union @ B @ A @ x))"
+  unfolding union_def thf_app_def
+  by blast
+""", from: true, show_thf_app: false)
+|> IO.puts()
+```
+
+## To TPTP from Isabelle
+
+`unbundle to_TPTP` changes output notation. `show_thf_app` controls whether
+ordinary function application is printed with explicit `@`.
+This cell toggles `show_thf_app` inside the body for comparing both translation styles.
+
+```elixir
+TPTP.check(client, tptp_import, "TPTPPrettyPrint", ~S"""
+declare [[show_types = true, show_abbrevs = true]]
+
+typedecl elem
+
+declare [[show_thf_app = true]]
+term "\<lambda>(A::elem \<Rightarrow> bool) x. A x"
+
+declare [[show_thf_app = false]]
+term "\<lambda>(A::elem \<Rightarrow> bool) x. A x"
+""", to: true)
+|> IO.puts()
+```
+
+## Round Trip: TPTP - Isabelle
+
+Both translation can be active at once: Isabelle parses THF-style input and prints
+the resulting term back in THF style. Note that below we are getting type
+inference for `A` and `B` for free.
+Here `from: true` enables parsing, `to: true` enables THF-style printing, and
+`show_thf_app: true` asks the printer to expose application as `@`.
+
+```elixir
+TPTP.check(client, tptp_import, "TPTPRoundTrip", ~S"""
+declare [[show_types = true, show_abbrevs = true]]
+
+term "! [A, B] :
+        (? [x::$i] : (A @ x) & ~(B @ x))
+        => ~(! [x::$i] : (A @ x) => (B @ x))"
+""", from: true, to: true, show_thf_app: true)
+|> IO.puts()
+```
+
+## Who Killed Agatha?
+
+The classic TPTP problem
+[`PUZ001+1.p`](https://tptp.org/cgi-bin/SeeTPTP?Category=Problems&Domain=PUZ&File=PUZ001+1.p)
+is a first-order puzzle: someone in Dreadbury Mansion killed Agatha, and the
+axioms imply that Agatha killed herself.
+
+The original problem is FOF. Here we write the same formulas in the bundled
+THF-style notation: `$i` for individuals, `$o` for propositions, `!`/`?` for
+quantifiers, and `@` for explicit application.
+
+```elixir
+agatha_problem = ~S"""
+consts agatha :: "$i"
+consts butler :: "$i"
+consts charles :: "$i"
+consts lives :: "$i > $o"
+consts killed :: "$i > $i > $o"
+consts hates :: "$i > $i > $o"
+consts richer :: "$i > $i > $o"
+
+lemma agatha_killed_herself:
+  assumes "? [X :: $i] : (lives @ X) & (killed @ X @ agatha)"
+    and "lives @ agatha"
+    and "lives @ butler"
+    and "lives @ charles"
+    and "! [X :: $i] : (lives @ X) => ((X = agatha) | (X = butler) | (X = charles))"
+    and "! [X :: $i, Y :: $i] : (killed @ X @ Y) => (hates @ X @ Y)"
+    and "! [X :: $i, Y :: $i] : (killed @ X @ Y) => ~(richer @ X @ Y)"
+    and "! [X :: $i] : (hates @ agatha @ X) => ~(hates @ charles @ X)"
+    and "! [X :: $i] : (X != butler) => (hates @ agatha @ X)"
+    and "! [X :: $i] : ~(richer @ X @ agatha) => (hates @ butler @ X)"
+    and "! [X :: $i] : (hates @ agatha @ X) => (hates @ butler @ X)"
+    and "! [X :: $i] : (? [Y :: $i] : ~(hates @ X @ Y))"
+    and "agatha != butler"
+  shows "killed @ agatha @ agatha"
+  using assms unfolding thf_app_def
+  __PROOF__
+"""
+```
+
+Ask Isabelle which basic proof method works.
+The longer timeout is only for `try0`, which runs a small portfolio of methods.
+
+```elixir
+TPTP.check(
+  client,
+  tptp_import,
+  "AgathaTry0",
+  String.replace(agatha_problem, "__PROOF__", "try0 oops"),
+  from: true,
+  show_thf_app: false,
+  timeout: 120_000
+)
+|> IO.puts()
+```
+
+`try0` suggests `metis`, so the theorem checks directly.
+
+```elixir
+TPTP.check(
+  client,
+  tptp_import,
+  "AgathaMetis",
+  String.replace(agatha_problem, "__PROOF__", "by metis"),
+  from: true,
+  show_thf_app: false,
+  timeout: 120_000
+)
+|> IO.puts()
+```
+
+## Stop and Shutdown
+
+```elixir
+{:ok, client, stop_task} = IsabelleClient.stop_session(client, 120_000)
+
+%{
+  remaining_sessions: client.sessions,
+  messages: IsabelleClient.messages(stop_task)
+}
+```
+
+```elixir
+IsabelleClient.shutdown_server(client)
+```

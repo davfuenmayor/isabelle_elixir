@@ -18,6 +18,7 @@ defmodule Isabelle.MixProject do
         licenses: ["MIT"],
         files: [
           "lib",
+          "priv",
           "livebook_examples",
           "mix.exs",
           "README.md",
@@ -32,9 +33,11 @@ defmodule Isabelle.MixProject do
         main: "readme",
         extras: [
           "README.md",
-          "livebook_examples/IsabelleClient.livemd",
-          "livebook_examples/IsabelleClientShared.livemd",
-          "livebook_examples/IsabelleClientRaw.livemd"
+          "livebook_examples/Client.livemd",
+          "livebook_examples/ClientShared.livemd",
+          "livebook_examples/ClientRaw.livemd",
+          "livebook_examples/Unification.livemd",
+          "livebook_examples/TPTP.livemd"
         ],
         groups_for_extras: [
           Tutorials: ~r/livebook_examples\/.*/

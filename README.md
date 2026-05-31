@@ -62,14 +62,17 @@ from the start of the generated file.
 
 ## More Examples
 
-The main tutorial is in the Livebooks:
+The main tutorials are in the Livebooks:
 
-1. `livebook_examples/IsabelleClient.livemd`: default client, diagnostics,
+1. `livebook_examples/Client.livemd`: default client, diagnostics,
    line/offset filtering, sessions, checking files/text, building sessions.
-2. `livebook_examples/IsabelleClientShared.livemd`: shared process-owned
+2. `livebook_examples/ClientShared.livemd`: shared process-owned
    client for concurrent callers.
-3. `livebook_examples/IsabelleClientRaw.livemd`: raw socket usage, server
+3. `livebook_examples/ClientRaw.livemd`: raw socket usage, server
    management, protocol commands, explicit async tasks.
+4. `livebook_examples/Unification.livemd`: Isabelle unification and matching
+   examples from Elixir.
+5. `livebook_examples/TPTP.livemd`: TPTP/THF-style syntax and pretty-printing.
 
 
 ## Existing Servers
