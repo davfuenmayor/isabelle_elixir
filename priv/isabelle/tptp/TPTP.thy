@@ -32,6 +32,8 @@ syntax
   "_thf_ex" :: "args \<Rightarrow> logic \<Rightarrow> logic"  ("(3? [(_)] :/ _)" [0, 10] 10)
   "_thf_idtyp" :: "id \<Rightarrow> type \<Rightarrow> idt" ("(1_ :/ _)" [4, 0] 0)
   "_thf_constrain" :: "logic \<Rightarrow> type \<Rightarrow> logic" ("_ :/ _" [4, 0] 3)
+  "_thf_All" :: "logic \<Rightarrow> logic" ("!!")
+  "_thf_Ex" :: "logic \<Rightarrow> logic" ("??")
 
 (*Other TPTP interpreted symbol types*)
 typedecl i
@@ -59,6 +61,8 @@ bundle from_TPTP begin
   "! [x] : t" \<rightharpoonup> "(\<forall>x. t)"
   "? [x] : t" \<rightharpoonup> "(\<exists>x. t)"
   "f @ x" \<rightharpoonup> "f x"
+  "!! t" \<rightharpoonup> "CONST All t"
+  "?? t" \<rightharpoonup> "CONST Ex t"
 
   type_notation(input) i ("$i")
   (*... add others*)
@@ -85,6 +89,8 @@ no_notation (output) Ex  (binder \<open>\<exists>\<close> 10)
   "! [x] : t" \<leftharpoondown> "CONST All (\<lambda>x. t)"
   "? [x] : t" \<leftharpoondown> "CONST Ex (\<lambda>x. t)" 
   "^ [x] : t" \<leftharpoondown> "(\<lambda>x. t)"
+  "!! t" \<leftharpoondown> "CONST All t"
+  "?? t" \<leftharpoondown> "CONST Ex t"
 
   type_notation(output) i ("$i")
   (*... add others*)
