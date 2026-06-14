@@ -8,13 +8,14 @@ theory provides syntax bundles for parsing and printing THF-like formulas.
 
 Behind the scenes:
 
-* `priv/isabelle/tptp/ROOT` declares the session `IsabelleElixirTPTP`
 * `priv/isabelle/tptp/TPTP.thy` defines the THF notation bundles and the
   explicit application operator `@`
+* `IsabelleClient.TPTP.load/1` copies that theory into an existing Isabelle
+  session and checks it there
 
-This is not a parser for full annotated TPTP problem files like
-`thf(name, role, formula).` It is a lightweight bridge for writing Isabelle
-theories with THF-style syntax and inspecting THF-style pretty output.
+This is not a full TPTP frontend. It is a lightweight bridge for writing
+Isabelle theories with THF-style syntax, inspecting THF-style pretty output,
+and converting a small subset of annotated THF formulae.
 
 In particular, we deviate from the THF "standard" in allowing untyped terms, ML-style schematic type variables (as in `'a > 'b`) instead of type quantifiers (which are not supported), and the infix application operator `@` can be omitted (optionally).
 
@@ -47,15 +48,11 @@ IsabelleClient.Server.executable()
 ## Start the Session
 
 ```elixir
-tptp_root = Path.expand("../priv/isabelle/tptp", __DIR__)
-tptp_session = "IsabelleElixirTPTP"
-tptp_import = "IsabelleElixirTPTP.TPTP"
+tptp_import = "TPTP"
 
 %{
-  root: tptp_root,
-  session: tptp_session,
   import: tptp_import,
-  files: File.ls!(tptp_root)
+  source: IsabelleClient.TPTP.source_path()
 }
 ```
 
@@ -63,75 +60,36 @@ tptp_import = "IsabelleElixirTPTP.TPTP"
 {:ok, client, start_task} =
   IsabelleClient.start_session(
     client,
-    [session: tptp_session, dirs: [tptp_root], verbose: true],
+    [session: "HOL", verbose: true],
     120_000
   )
 
+{:ok, tptp_task} = IsabelleClient.TPTP.load(client, 120_000)
+
 %{
   session_id: IsabelleClient.active_session(client).id,
-  messages: IsabelleClient.messages(start_task)
+  start_messages: IsabelleClient.messages(start_task),
+  tptp_messages: IsabelleClient.messages(tptp_task)
 }
 ```
 
-## Helper Module
+## Checking Examples
 
-One helper: check a small Isabelle theory body and show relevant messages.
-The `from:`, `to:`, and `show_thf_app:` options keep the examples focused on
-the problem text: the helper activates the corresponding Isabelle notation
-before the body and deactivates it afterwards.
-
-```elixir
-defmodule TPTP do
-  import IsabelleClient
-
-  # Activate THF input/output syntax around the user-provided theory fragment.
-  defp enable(opts) do
-    [
-      opts[:from] && "unbundle from_TPTP",
-      opts[:to] && "unbundle to_TPTP",
-      Keyword.has_key?(opts, :show_thf_app) && "declare [[show_thf_app = #{opts[:show_thf_app]}]]"
-    ]
-    |> Enum.filter(& &1)
-    |> Enum.join("\n")
-  end
-
-  # Restore notation after each example so cells remain independent.
-  defp disable(opts) do
-    [
-      Keyword.has_key?(opts, :show_thf_app) && "declare [[show_thf_app = false]]",
-      opts[:to] && "unbundle no to_TPTP",
-      opts[:from] && "unbundle no from_TPTP"
-    ]
-    |> Enum.filter(& &1)
-    |> Enum.join("\n")
-  end
-
-  defp output?(message) do
-    not (String.starts_with?(message, "theory ") or
-           message in ["bundle from_TPTP", "bundle to_TPTP"])
-  end
-  
-  def check(client, import_name, theory_name, body, opts \\ []) do
-    # The wrapper is ordinary Isabelle text; check_text writes it to a temporary
-    # theory and asks Isabelle to process that theory (we activate unicode output).
-    body = Enum.join([enable(opts), body, disable(opts)], "\n\n")
-    timeout = Keyword.get(opts, :timeout, 20_000)
-    {:ok, task} = check_text(client, theory_name, body, [imports: import_name, unicode_symbols: true], timeout)
-    messages = task |> messages() |> Enum.filter(&output?/1)
-    errors = errors(task)
-
-    if errors == [], do: Enum.join(messages, "\n\n"), else: %{ok?: task.result["ok"], messages: messages, errors: errors}
-  end
-end
-```
+`IsabelleClient.TPTP.check/5` checks a small Isabelle theory body and returns
+only the relevant Isabelle messages. The `from:`, `to:`, and `show_thf_app:`
+options keep the examples focused on the problem text: the function activates
+the corresponding Isabelle notation before the body and deactivates it
+afterwards.
 
 ## From TPTP to Isabelle
 
-The `check` function invokes `IsabelleClient.check_text` under the hood, which takes a client, an import statement, and the theory body. Additionally, the option `from: true` wraps the body in
+`IsabelleClient.TPTP.check/5` takes a client, import name, theory name, and
+theory body, then invokes `IsabelleClient.check_text/5` under the hood.
+Additionally, the option `from: true` wraps the body in
 `unbundle from_TPTP ... unbundle no from_TPTP`, in order to activate the TPTP -> Isabelle translation (and deactivate it afterwards). The option `show_thf_app: false` deactivates the explicit infix application notation `@` (which is mostly useful for the Isabelle -> TPTP direction).
 
 ```elixir
-TPTP.check(client, tptp_import, "TPTPSyllogism", ~S"""
+IsabelleClient.TPTP.check(client, tptp_import, "TPTPSyllogism", ~S"""
 typedecl entity
 consts human :: "entity > $o"
 consts mortal :: "entity > $o"
@@ -151,7 +109,7 @@ Characteristic functions give a compact encoding of sets. This example defines
 union with THF notation and proves commutativity.
 
 ```elixir
-TPTP.check(client, tptp_import, "TPTPSetUnion", ~S"""
+IsabelleClient.TPTP.check(client, tptp_import, "TPTPSetUnion", ~S"""
 typedecl elem
 type_synonym eset = "elem > $o"
 
@@ -174,7 +132,7 @@ ordinary function application is printed with explicit `@`.
 This cell toggles `show_thf_app` inside the body for comparing both translation styles.
 
 ```elixir
-TPTP.check(client, tptp_import, "TPTPPrettyPrint", ~S"""
+IsabelleClient.TPTP.check(client, tptp_import, "TPTPPrettyPrint", ~S"""
 declare [[show_types = true, show_abbrevs = true]]
 
 typedecl elem
@@ -190,14 +148,14 @@ term "\<lambda>(A::elem \<Rightarrow> bool) x. A x"
 
 ## Round Trip: TPTP - Isabelle
 
-Both translation can be active at once: Isabelle parses THF-style input and prints
+Both translations can be active at once: Isabelle parses THF-style input and prints
 the resulting term back in THF style. Note that below we are getting type
 inference for `A` and `B` for free.
 Here `from: true` enables parsing, `to: true` enables THF-style printing, and
 `show_thf_app: true` asks the printer to expose application as `@`.
 
 ```elixir
-TPTP.check(client, tptp_import, "TPTPRoundTrip", ~S"""
+IsabelleClient.TPTP.check(client, tptp_import, "TPTPRoundTrip", ~S"""
 declare [[show_types = true, show_abbrevs = true]]
 
 term "! [A, B] :
@@ -205,6 +163,138 @@ term "! [A, B] :
         => ~(! [x::$i] : (A @ x) => (B @ x))"
 """, from: true, to: true, show_thf_app: true)
 |> IO.puts()
+```
+
+## Annotated THF Formulae
+
+`IsabelleClient.TPTP.isabellize_theory/1` accepts a small THF/TPTP fragment and
+turns supported annotated formulae of the form
+`thf(name, role, formula, metadata).` into Isabelle theory commands. It
+preserves THF formulas as text; use it together with `from: true` so the
+`from_TPTP` bundle parses those formulas.
+
+Supported annotated formulae are intentionally minimal:
+
+* `thf(name, type, (T: $tType)).` becomes `typedecl T`
+* `thf(name, type, (c: T)).` becomes `consts c :: "T"`
+* `thf(name, type, (alias: old = new)).` becomes `type_synonym alias = "new"`
+* `thf(name, axiom, formula, file(...), [simp]).` becomes `axiomatization where name[simp]: "formula"`
+* `thf(name, theorem/conjecture, formula).` becomes `lemma name: "formula"`
+* `include('path/file.ext').` becomes `imports "path/file"`
+
+Metadata is allowed to be any comma-separated list of TPTP terms after the
+formula, including nested commas such as `file('x.p', name)` or
+`inference(rule, [], [a,b])`. The converter does not interpret or filter
+metadata values. If a metadata argument is already a bracketed Isabelle
+attribute list, its contents are copied verbatim to the generated declaration;
+metadata outside that bracket-list shape, such as `file(...)`, is ignored.
+TPTP comments are preserved as Isabelle comments: `% ...` and `/* ... */`
+become `(* ... *)`.
+
+Include directives are intentionally simple-minded: the first path argument is
+unquoted, its final extension is removed, and any optional selection list is
+ignored. The resulting `imports` line belongs in an Isabelle theory header, so
+the following example is printed rather than passed to `check_text` as a theory
+body fragment.
+
+```elixir
+include_demo = ~S"""
+include('Axioms/SET001.ax').
+include('Problems/PUZ001+0.p', [agatha, butler]).
+"""
+
+IO.puts(IsabelleClient.TPTP.isabellize_theory(include_demo))
+```
+
+Converted lemmas are proof obligations. Add a proof after them, or close them
+with `oops` when you only want to parse and inspect the generated Isabelle text.
+
+```elixir
+annotated_tptp = ~S"""
+% Type constants, type aliases, and term constants.
+thf(type_entity,type,(entity: $tType), file('example.p', type_entity)).
+thf(type_predicate,type,(predicate: entity > $o = entity > $o), introduced(local)).
+thf(type_human,type,(human: entity > $o), [description('predicate')]).
+thf(type_socrates,type,(socrates: entity), [description('constant')]).
+
+% The bracketed metadata list is passed through as Isabelle attributes.
+thf(ax_human_self,axiom,
+  (! [X: entity] : (human @ X) => (human @ X)),
+  file('example.p', ax_human_self),
+  [simp]).
+
+thf(conj_some_human,conjecture,
+  (? [X: entity] : (human @ X)),
+  inference(copy, [], [ax_human_self]),
+  []).
+"""
+
+isabelle_fragment = IsabelleClient.TPTP.isabellize_theory(annotated_tptp)
+IO.puts(isabelle_fragment)
+```
+
+The generated conjecture is a `lemma`, so this parse-only example closes it with
+`oops`.
+
+```elixir
+IsabelleClient.TPTP.check(
+  client,
+  tptp_import,
+  "TPTPAnnotatedFormulae",
+  isabelle_fragment <> "\noops",
+  from: true,
+  show_thf_app: false
+)
+|> IO.puts()
+```
+
+For converted `theorem` formulae, append the proof that should discharge the
+generated `lemma`.
+
+```elixir
+annotated_theorem = ~S"""
+thf(type_person,type,(person: $tType)).
+thf(type_good,type,(good: person > $o)).
+thf(type_alice,type,(alice: person)).
+
+thf(ax_good_self,axiom,
+  ((good @ alice) => (good @ alice)),
+  file('example.p', ax_good_self),
+  [simp]).
+
+thf(thm_good_self,theorem,
+  ((good @ alice) => (good @ alice)),
+  inference(copy, [], [ax_good_self]),
+  [intro]).
+"""
+
+proved_fragment =
+  IsabelleClient.TPTP.isabellize_theory(annotated_theorem) <> "\nby simp"
+
+IsabelleClient.TPTP.check(
+  client,
+  tptp_import,
+  "TPTPAnnotatedTheorem",
+  proved_fragment,
+  from: true,
+  show_thf_app: false
+)
+|> IO.puts()
+```
+
+The metadata pass-through is shape-based, not name-based. This example is only
+printed, because arbitrary attribute names must still be meaningful to Isabelle
+if you later check the generated text.
+
+```elixir
+metadata_shape_demo = ~S"""
+thf(ax_attrs,axiom,
+  ($true),
+  file('ignored.p', ax_attrs),
+  [foo, bar(baz, qux), simp]).
+"""
+
+IO.puts(IsabelleClient.TPTP.isabellize_theory(metadata_shape_demo))
 ```
 
 ## Who Killed Agatha?
@@ -252,7 +342,7 @@ Ask Isabelle which basic proof method works.
 The longer timeout is only for `try0`, which runs a small portfolio of methods.
 
 ```elixir
-TPTP.check(
+IsabelleClient.TPTP.check(
   client,
   tptp_import,
   "AgathaTry0",
@@ -267,7 +357,7 @@ TPTP.check(
 `try0` suggests `metis`, so the theorem checks directly.
 
 ```elixir
-TPTP.check(
+IsabelleClient.TPTP.check(
   client,
   tptp_import,
   "AgathaMetis",

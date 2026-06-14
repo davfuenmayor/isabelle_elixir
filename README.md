@@ -61,6 +61,10 @@ So Isabelle diagnostics report line 1 as the generated header; snippet line `n`
 appears as Isabelle line `n + 1`. Offsets are absolute Isabelle symbol offsets
 from the start of the generated file.
 
+For TPTP/THF examples, `IsabelleClient.TPTP.check/5` wraps `check_text/5` with
+Unicode output, routine message filtering, and optional `from:`, `to:`, and
+`show_thf_app:` notation setup.
+
 ## More Examples
 
 The main tutorials are in the Livebooks:
@@ -74,7 +78,6 @@ The main tutorials are in the Livebooks:
 4. `livebook_examples/Unification.livemd`: Isabelle unification and matching
    examples from Elixir.
 5. `livebook_examples/TPTP.livemd`: TPTP/THF-style syntax and pretty-printing.
-
 
 ## Existing Servers
 

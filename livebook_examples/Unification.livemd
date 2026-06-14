@@ -2,7 +2,7 @@
 
 ## Intro
 
-This notebook showcases Isabelle unification functionalities from Elixir.
+This notebook showcases Isabelle unification and matching from Elixir.
 We can send ordinary Isabelle theory text (unicode supported) such as:
 
 ```isabelle
@@ -48,32 +48,28 @@ IsabelleClient.Server.executable()
 ## Start Session
 
 The examples below import the session-qualified theory
-`IsabelleElixirUnification.Unification`. The three names are kept explicit:
+`IsabelleElixirUnification.Unification`. The relevant names are kept explicit:
 
 * `unification_root`: directory containing the `ROOT` file
 * `unification_session`: session name declared by that `ROOT`
 * `unification_import`: theory imported by each generated `check_text` invocation
 
-The final section also imports the TPTP/THF notation theory, so we make that
-session visible from the same Isabelle session.
+The final section also imports the TPTP/THF notation theory, so we load the
+bundled `TPTP.thy` into the same Isabelle session.
 
 ```elixir
 unification_root = Path.expand("../priv/isabelle/unification", __DIR__)
 unification_session = "IsabelleElixirUnification"
 unification_import = "IsabelleElixirUnification.Unification"
-tptp_root = Path.expand("../priv/isabelle/tptp", __DIR__)
-tptp_session = "IsabelleElixirTPTP"
-tptp_import = "IsabelleElixirTPTP.TPTP"
+tptp_import = "TPTP"
 
 %{
   root: unification_root,
-  tptp_root: tptp_root,
   session: unification_session,
-  included_session: tptp_session,
   import: unification_import,
   tptp_import: tptp_import,
+  tptp_source: IsabelleClient.TPTP.source_path(),
   files: File.ls!(unification_root),
-  tptp_files: File.ls!(tptp_root)
 }
 ```
 
@@ -83,49 +79,30 @@ tptp_import = "IsabelleElixirTPTP.TPTP"
     client,
     [
       session: unification_session,
-      dirs: [unification_root, tptp_root],
-      include_sessions: [tptp_session],
+      dirs: [unification_root],
       verbose: true
     ],
     120_000
   )
 
+{:ok, tptp_task} = IsabelleClient.TPTP.load(client, 120_000)
+
 %{
   session_id: IsabelleClient.active_session(client).id,
-  messages: IsabelleClient.messages(start_task)
+  start_messages: IsabelleClient.messages(start_task),
+  tptp_messages: IsabelleClient.messages(tptp_task)
 }
 ```
 
-## Helper Module
+## Checking Examples
+
+Every example below sends a small Isabelle command string through
+`IsabelleClient.TPTP.check/5`, which wraps `check_text/5` and filters out
+routine theory-progress messages. The remaining messages are produced by
+Isabelle itself.
 
 ```elixir
-defmodule Unification do
-  import IsabelleClient
-
-  defp output?(message) do
-    not (String.starts_with?(message, "theory ") or
-           String.starts_with?(message, "Loading ") or
-           String.starts_with?(message, "consts\n  thf_app") or
-           String.starts_with?(message, "val protected =") or
-           message in ["bundle from_TPTP", "bundle to_TPTP"])
-  end
-
-  def check(client, import_name, theory_name, body) do
-    {:ok, task} = check_text(client, theory_name, body, [imports: import_name, unicode_symbols: true], 60_000)
-    messages = task |> messages() |> Enum.filter(&output?/1)
-    errors = errors(task)
-
-    if errors == [], do: Enum.join(messages, "\n\n"), else: %{ok?: task.result["ok"], messages: messages, errors: errors}
-  end
-end
-```
-
-Every example below sends a small Isabelle command string through the `isabelle_elixir` API function `check_text`. The wrapper
-`Unification.check` only filters out routine theory-progress messages; the
-remaining messages are produced by Isabelle itself.
-
-```elixir
-Unification.check(client, unification_import, "RawPatternUnify", ~S"""
+IsabelleClient.TPTP.check(client, unification_import, "RawPatternUnify", ~S"""
 typedecl i
 consts f :: "i => i"
 consts g :: "i ⇒ i" (* unicode supported *)
@@ -145,7 +122,7 @@ unification pattern_unify "λx::i. (?F x :: i)" "λx::i. f (g x)"
 left_type = "('a list ⇒ j) ⇒ 'a list"
 right_type = "(i list ⇒ 'b) ⇒ i list"
 
-Unification.check(client, unification_import, "TypeUnify", """
+IsabelleClient.TPTP.check(client, unification_import, "TypeUnify", """
 typedecl i
 typedecl j
 
@@ -161,7 +138,7 @@ instantiated to make it match the second type. It invokes Isabelle's `Sign.typ_m
 type_pattern = "'b ⇒ 'a list"
 type_object = "(i ⇒ j) ⇒ i list"
 
-Unification.check(client, unification_import, "TypeMatch", """
+IsabelleClient.TPTP.check(client, unification_import, "TypeMatch", """
 typedecl i
 typedecl j
 
@@ -180,7 +157,7 @@ unification type_match ‹#{type_pattern}› ‹#{type_object}›
 left_term = "λx::i. ?F x"
 right_term = "\\<lambda>x::i. f (g x)" # unicode input is optional
 
-Unification.check(client, unification_import, "PatternUnify", """
+IsabelleClient.TPTP.check(client, unification_import, "PatternUnify", """
 typedecl i
 consts f :: "i ⇒ i"
 consts g :: "i => i"
@@ -198,7 +175,7 @@ pattern.
 left_term = "λx::i. (?F x x :: i)"
 right_term = "λx::i. f x"
 
-Unification.check(client, unification_import, "PatternFragmentFailure", """
+IsabelleClient.TPTP.check(client, unification_import, "PatternFragmentFailure", """
 typedecl i
 consts f :: "i ⇒ i"
 
@@ -213,7 +190,7 @@ unification pattern_unify ‹#{left_term}› ‹#{right_term}›
 pattern = "h ?x (f ?y)"
 object = "h a (f b)"
 
-Unification.check(client, unification_import, "PatternMatch", """
+IsabelleClient.TPTP.check(client, unification_import, "PatternMatch", """
 typedecl i
 consts a :: i
 consts b :: i
@@ -231,7 +208,7 @@ Use `pattern_matches` for a boolean answer.
 pattern = "h ?x (f ?y)"
 object = "h a (f b)"
 
-Unification.check(client, unification_import, "PatternMatches", """
+IsabelleClient.TPTP.check(client, unification_import, "PatternMatches", """
 typedecl i
 consts a :: i
 consts b :: i
@@ -251,7 +228,7 @@ target = "h a (f b)"
 lhs = "h ?x (f ?y)"
 rhs = "h ?y (f ?x)"
 
-Unification.check(client, unification_import, "PatternRewrite", """
+IsabelleClient.TPTP.check(client, unification_import, "PatternRewrite", """
 typedecl i
 consts a :: i
 consts b :: i
@@ -274,7 +251,7 @@ example `?F` is applied to the same bound variable twice, so it is not a pattern
 left_term = "λx::i. (?F x x :: i)"
 right_term = "λx::i. f x"
 
-Unification.check(client, unification_import, "PreunifiersBeyondPattern", """
+IsabelleClient.TPTP.check(client, unification_import, "PreunifiersBeyondPattern", """
 typedecl i
 consts f :: "i ⇒ i"
 
@@ -290,7 +267,7 @@ flex-flex pair.
 left_term = "λx::i. (?F x :: i)"
 right_term = "λx::i. (?F (f x) :: i)"
 
-Unification.check(client, unification_import, "FlexFlexPreunifiers", """
+IsabelleClient.TPTP.check(client, unification_import, "FlexFlexPreunifiers", """
 typedecl i
 consts f :: "i ⇒ i"
 
@@ -305,7 +282,7 @@ unification unifiers ‹#{left_term}› ‹#{right_term}›
 left_term = "λx::i. (?F x :: i)"
 right_term = "λx::i. (?F (f x) :: i)"
 
-Unification.check(client, unification_import, "SmashedFlexFlexPreunifiers", """
+IsabelleClient.TPTP.check(client, unification_import, "SmashedFlexFlexPreunifiers", """
 typedecl i
 consts f :: "i ⇒ i"
 
@@ -320,7 +297,7 @@ unification smash_unifiers ‹#{left_term}› ‹#{right_term}›
 pattern = "λx::i. (?F x :: i)"
 object = "λx::i. f (g x)"
 
-Unification.check(client, unification_import, "Matchers", """
+IsabelleClient.TPTP.check(client, unification_import, "Matchers", """
 typedecl i
 consts f :: "i ⇒ i"
 consts g :: "i ⇒ i"
@@ -336,7 +313,7 @@ unification matchers ‹#{pattern}› ‹#{object}›
 pattern = "λx::i. (?F x :: i)"
 object = "λx::i. f (g x)"
 
-Unification.check(client, unification_import, "Matcher", """
+IsabelleClient.TPTP.check(client, unification_import, "Matcher", """
 typedecl i
 consts f :: "i ⇒ i"
 consts g :: "i ⇒ i"
@@ -351,7 +328,7 @@ unification matcher ‹#{pattern}› ‹#{object}›
 ## TPTP/THF Syntax
 
 This repeats the first higher-order preunification example, but the input term
-is written with the bundled THF notation from `IsabelleElixirTPTP.TPTP`.
+is written with the bundled THF notation from `TPTP`.
 
 Here `^ [x : $i] : ...` is THF-style lambda syntax and `$i` is the TPTP
 individual type. Application is left implicit as `?F x x` and `f x`: in this
@@ -361,15 +338,11 @@ support theory, explicit `@` is the Isabelle constant `thf_app`, so using
 ```elixir
 thf_import = "#{unification_import} #{tptp_import}"
 
-Unification.check(client, thf_import, "THFPreunifiersBeyondPattern", ~S"""
-unbundle from_TPTP
-unbundle no to_TPTP
-declare [[show_thf_app = false]]
-
+IsabelleClient.TPTP.check(client, thf_import, "THFPreunifiersBeyondPattern", ~S"""
 consts f :: "$i > $i"
 
 unification unifiers "^ [x : $i] : (?F x x : $i)" "^ [x : $i] : f x"
-""")
+""", from: true, show_thf_app: false)
 |> IO.puts()
 ```
 
@@ -378,15 +351,11 @@ We can also have output in TPTP/THF-like syntax:
 ```elixir
 thf_import = "#{unification_import} #{tptp_import}"
 
-Unification.check(client, thf_import, "THFPreunifiersBeyondPattern", ~S"""
-unbundle from_TPTP
-unbundle to_TPTP
-declare [[show_thf_app = true]]
-
+IsabelleClient.TPTP.check(client, thf_import, "THFPreunifiersBeyondPattern", ~S"""
 consts f :: "$i > $i"
 
 unification unifiers "^ [x : $i] : (?F x x : $i)" "^ [x : $i] : f x"
-""")
+""", from: true, to: true, show_thf_app: true)
 |> IO.puts()
 ```
 
