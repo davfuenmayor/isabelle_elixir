@@ -35,6 +35,72 @@ defmodule IsabelleClient.SharedTest do
     assert_server_down(server)
   end
 
+  test "late command responses after timeout are not assigned to later callers" do
+    {:ok, pid, server} =
+      start_fake_authenticated_server(fn socket, parent ->
+        {:ok, first} = IsabelleTestSupport.recv_line(socket)
+        send(parent, {:command, :first, first})
+
+        Process.sleep(100)
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"reply" => "first"}))
+      end)
+
+    assert {:error, :timeout} = Shared.command(pid, "echo", %{"request" => "first"}, 50)
+    assert_receive {:command, :first, "echo {\"request\":\"first\"}"}
+
+    assert {:error, {:connection_closed, :timeout}} =
+             Shared.command(pid, "echo", %{"request" => "second"}, 1_000)
+
+    refute_receive {:command, :second, _}
+
+    :ok = Shared.close(pid)
+    assert_server_down(server)
+  end
+
+  test "cancel acknowledgement after task timeout is not assigned to later callers" do
+    {:ok, pid, server} =
+      start_fake_authenticated_server(fn socket, parent ->
+        {:ok, first} = IsabelleTestSupport.recv_line(socket)
+        send(parent, {:command, :first, first})
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"task" => "task-1"}))
+
+        {:ok, cancel} = IsabelleTestSupport.recv_line(socket)
+        send(parent, {:command, :cancel, cancel})
+
+        :ok = :gen_tcp.send(socket, Protocol.command("OK", nil))
+      end)
+
+    assert {:error, :timeout} = Shared.build_session(pid, [session: "HOL"], 50)
+    assert_receive {:command, :first, "session_build {\"session\":\"HOL\"}"}
+    assert_receive {:command, :cancel, "cancel {\"task\":\"task-1\"}"}
+
+    assert {:error, {:connection_closed, :timeout}} =
+             Shared.command(pid, "echo", %{"request" => "second"}, 1_000)
+
+    refute_receive {:command, :second, _}
+
+    :ok = Shared.close(pid)
+    assert_server_down(server)
+  end
+
+  @tag timeout: 180_000
+  test "real Isabelle shared client is not reused after a task timeout" do
+    IsabelleTestSupport.with_server("shared_real_timeout", fn server ->
+      assert {:ok, pid} =
+               Shared.connect(
+                 password: server["password"],
+                 host: server["host"],
+                 port: server["port"]
+               )
+
+      assert {:error, :timeout} = Shared.start_session(pid, [session: "HOL"], 1)
+
+      assert {:error, {:connection_closed, :timeout}} = Shared.echo(pid, "after-timeout")
+
+      assert :ok = Shared.close(pid)
+    end)
+  end
+
   test "concurrent async tasks are routed by task id with event callbacks" do
     parent = self()
 

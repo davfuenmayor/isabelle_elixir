@@ -19,7 +19,7 @@ defmodule IsabelleClient.Shared do
   @default_timeout 30_000
   @call_timeout_grace 1_000
 
-  defstruct [:client, :reader, pending: [], tasks: %{}]
+  defstruct [:client, :reader, :closed_reason, pending: [], tasks: %{}]
 
   @doc """
   Starts a GenServer-backed Isabelle client.
@@ -170,6 +170,11 @@ defmodule IsabelleClient.Shared do
   end
 
   @impl true
+  def handle_call(_request, _from, %__MODULE__{closed_reason: reason} = state)
+      when not is_nil(reason) do
+    {:reply, {:error, {:connection_closed, reason}}, state}
+  end
+
   def handle_call({:command, name, arg, timeout}, from, state) do
     enqueue_command(state, from, name, arg, {:sync, timeout})
   end
@@ -240,7 +245,7 @@ defmodule IsabelleClient.Shared do
 
       {request, pending} ->
         GenServer.reply(request.from, {:error, :timeout})
-        {:noreply, %{state | pending: pending}}
+        {:noreply, close_connection(%{state | pending: pending}, :timeout)}
     end
   end
 
@@ -252,13 +257,12 @@ defmodule IsabelleClient.Shared do
       {task, tasks} ->
         Protocol.send(state.client.socket, Protocol.command("cancel", %{"task" => id}))
         GenServer.reply(task.from, {:error, :timeout})
-        {:noreply, %{state | tasks: tasks}}
+        {:noreply, close_connection(%{state | tasks: tasks}, :timeout)}
     end
   end
 
   def handle_info({:isabelle_reader_error, reason}, state) do
-    fail_waiters(state, reason)
-    {:noreply, %{state | pending: [], tasks: %{}}}
+    {:noreply, close_connection(state, reason)}
   end
 
   defp async_call(server, action, args, timeout, opts) do
@@ -445,6 +449,17 @@ defmodule IsabelleClient.Shared do
     Enum.each(state.pending, &GenServer.reply(&1.from, {:error, reason}))
     Enum.each(state.tasks, fn {_id, task} -> GenServer.reply(task.from, {:error, reason}) end)
   end
+
+  defp close_connection(%__MODULE__{closed_reason: nil} = state, reason) do
+    fail_waiters(state, {:connection_closed, reason})
+
+    if state.reader, do: Process.exit(state.reader, :normal)
+    IsabelleClient.close(state.client)
+
+    %{state | closed_reason: reason, pending: [], tasks: %{}}
+  end
+
+  defp close_connection(%__MODULE__{} = state, _reason), do: state
 
   defp init_client(opts) do
     case Keyword.fetch(opts, :password) do

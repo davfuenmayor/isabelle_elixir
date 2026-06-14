@@ -26,7 +26,8 @@ sessions, with the most recently started session treated as active.
 
 Use `IsabelleClient.Shared` when several Elixir processes should share one
 connection. It owns the socket in a `GenServer` and routes async task replies by
-Isabelle task id.
+Isabelle task id. If a command or task times out, the shared connection is
+currently closed conservatively (reusing the socket before the stale reply is handled could return the wrong result to a later caller).
 
 Use `IsabelleClient.Raw` when you want protocol-level control: explicit socket
 ownership, explicit session ids, and explicit task waiting.

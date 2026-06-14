@@ -348,6 +348,19 @@ failure_events =
 {purge_result["purged"], purge_result["retained"]}
 ```
 
+## Timeout Safety
+
+The server protocol tags async task messages (`NOTE`, `FINISHED`, `FAILED`) with
+task ids, so `IsabelleClient.Shared` can route concurrent tasks safely. The
+immediate command replies (`OK`, `ERROR`) are different: they are only ordered on
+the connection. If a command times out, a later stale `OK` could otherwise be
+mistaken for the next caller's reply. For now the Shared client uses a
+conservative fix: after a command or task timeout, it closes that shared
+connection and later calls return `{:error, {:connection_closed, :timeout}}`.
+A future implementation could be less draconian by pausing new commands,
+draining the one stale top-level reply, and continuing to route task messages by
+id while draining.
+
 ## Stop And Shutdown
 
 ```elixir
