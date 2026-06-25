@@ -14,7 +14,7 @@ Start here if you are learning the library. The other notebooks build on this on
 
 <!-- livebook:{"break_markdown":true} -->
 
-When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.4"}`.
 
 ```elixir
 Mix.install([
@@ -382,7 +382,7 @@ commands, as in the following:
 
 ```elixir
 dummy_text = String.duplicate("(*Lorem ipsum dolor sit amet.*)\n", 100)
-theory_body = ~s(lemma "x = x" nitpick[satisfy] sledgehammer by simp \n #{dummy_text} \n 
+theory_body = ~s(lemma "x = x" nitpick[satisfy] sledgehammer by simp \n #{dummy_text} \n
                   lemma "xs @ [] = xs" nitpick[satisfy] by simp)
 
 {:ok, use_theories_task} =

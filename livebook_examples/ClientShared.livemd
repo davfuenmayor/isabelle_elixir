@@ -27,7 +27,7 @@ process is a good pattern.
 
 <!-- livebook:{"break_markdown":true} -->
 
-When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.4"}`.
 
 ```elixir
 Mix.install([

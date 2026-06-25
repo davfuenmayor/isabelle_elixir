@@ -11,7 +11,7 @@ you send a command, receive a task id, then wait for the task yourself.
 
 <!-- livebook:{"break_markdown":true} -->
 
-When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.4"}`.
 
 ```elixir
 Mix.install([

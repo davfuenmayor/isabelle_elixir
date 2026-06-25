@@ -21,7 +21,7 @@ In particular, we deviate from the THF "standard" in allowing untyped terms, ML-
 
 <!-- livebook:{"break_markdown":true} -->
 
-When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.3"}`.
+When using the published package, replace the dependency with `{:isabelle_elixir, "~> 0.4"}`.
 
 ```elixir
 Mix.install([
