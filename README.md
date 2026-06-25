@@ -9,7 +9,7 @@ details, see chapter 4 of the
 ## Installation
 
 ```elixir
-{:isabelle_elixir, "~> 0.3"}
+{:isabelle_elixir, "~> 0.4"}
 ```
 
 Local server helpers need the Isabelle executable. Set `ISABELLE_TOOL` when

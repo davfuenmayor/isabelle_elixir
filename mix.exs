@@ -5,8 +5,8 @@ defmodule Isabelle.MixProject do
   def project do
     [
       app: :isabelle_elixir,
-      version: "0.3.0",
-      elixir: "~> 1.19",
+      version: "0.4.0",
+      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
 
@@ -22,6 +22,7 @@ defmodule Isabelle.MixProject do
           "livebook_examples",
           "mix.exs",
           "README.md",
+          "CHANGELOG.md",
           "LICENSE"
         ],
         links: %{
@@ -42,7 +43,7 @@ defmodule Isabelle.MixProject do
         groups_for_extras: [
           Tutorials: ~r/livebook_examples\/.*/
         ],
-        source_ref: "v0.3.0"
+        source_ref: "v0.4.0"
       ]
     ]
   end
