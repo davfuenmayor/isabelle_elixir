@@ -9,6 +9,15 @@ defmodule IsabelleClient.TPTP do
 
   @theory "TPTP"
 
+  # Read at compile time and carried in the module's binary. `priv/` is a real
+  # directory only for a normal Mix build: escripts bundle nothing but `ebin`,
+  # so `Application.app_dir/2` there resolves *through* the escript file and
+  # any read fails with :enotdir. Embedding keeps `TPTP.thy` reachable from
+  # escript-packaged callers (e.g. the atp_mcp server) as well.
+  @thy_path Path.join([__DIR__, "..", "..", "priv", "isabelle", "tptp", "#{@theory}.thy"])
+  @external_resource @thy_path
+  @source_text File.read!(@thy_path)
+
   @doc """
   Loads the bundled `TPTP.thy` support theory into the active client session.
 
@@ -20,12 +29,21 @@ defmodule IsabelleClient.TPTP do
     with %Session{tmp_dir: tmp_dir} when is_binary(tmp_dir) <-
            IsabelleClient.active_session(client) do
       File.mkdir_p!(tmp_dir)
-      File.cp!(source_path(), Path.join(tmp_dir, "#{@theory}.thy"))
+      File.write!(Path.join(tmp_dir, "#{@theory}.thy"), source_text())
       IsabelleClient.use_theories(client, [theories: [@theory], master_dir: tmp_dir], timeout)
     else
       _ -> {:error, :no_session}
     end
   end
+
+  @doc """
+  Contents of the bundled `TPTP.thy`.
+
+  Prefer this over `source_path/0`: it works regardless of how the caller is
+  packaged, whereas `source_path/0` points into `priv/` and so only resolves
+  for a normal Mix build.
+  """  
+  def source_text, do: @source_text
 
   @doc false
   def source_path do
