@@ -9,7 +9,6 @@ defmodule IsabelleClient do
   socket control.
   """
 
-  alias IsabelleClient.Arguments
   alias IsabelleClient.Raw
   alias IsabelleClient.Result
   alias IsabelleClient.Session
@@ -24,7 +23,7 @@ defmodule IsabelleClient do
 
   @typedoc "Stateful client with one socket and a local stack of Isabelle sessions."
   @type t :: %__MODULE__{
-          socket: port(),
+          socket: port() | pid(),
           sessions: [Session.t()],
           server_name: String.t() | nil
         }
@@ -49,7 +48,8 @@ defmodule IsabelleClient do
 
   Pass a `%IsabelleClient.Server.Info{}` returned by `start_server/1`, or pass
   the server password with explicit `:host` and `:port` options for an already
-  running local or remote server.
+  running local or remote server. Pass `:url` for an HTTPS/WSS
+  [Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom) endpoint.
   """
   def connect(server_or_password, opts \\ [])
 
@@ -66,12 +66,19 @@ defmodule IsabelleClient do
     port = Keyword.get(opts, :port, @default_port)
     timeout = Keyword.get(opts, :timeout, @timeout)
 
-    with {:ok, socket} <- Raw.connect(password, host, port, timeout) do
+    with {:ok, socket} <- connect_transport(password, opts, host, port, timeout) do
       {:ok, %__MODULE__{socket: socket}}
     end
   end
 
-  @doc "Closes the client's TCP socket."
+  defp connect_transport(password, opts, host, port, timeout) do
+    case Keyword.fetch(opts, :url) do
+      {:ok, url} -> Raw.connect_url(url, password, timeout)
+      :error -> Raw.connect(password, host, port, timeout)
+    end
+  end
+
+  @doc "Closes the client connection."
   def close(%__MODULE__{socket: socket}), do: Raw.close(socket)
 
   @doc "Runs a synchronous Isabelle command, normalizing Elixir keyword arguments to JSON keys."
@@ -233,14 +240,29 @@ defmodule IsabelleClient do
   def check_text(client, theory, text, opts \\ [], timeout \\ :infinity)
 
   def check_text(%__MODULE__{} = client, theory, text, opts, timeout) do
-    opts = Arguments.normalize(opts)
-
-    use_theories(
-      client,
-      Theory.write_args(theory, text, opts, default_master_dir(client, opts)),
-      timeout
-    )
+    with {:ok, args} <-
+           IsabelleClient.Files.prepare(client, theory, text, opts, &command(client, &1, &2)) do
+      use_theories(client, args, timeout)
+    end
   end
+
+  @doc "Places text in the active session (remote paths must be relative)."
+  def write_file(client, path, text, opts \\ []),
+    do: IsabelleClient.Files.write(client, path, text, opts, &command(client, &1, &2))
+
+  @doc "Creates independently owned remote project sources; remove after all users stop."
+  def create_project(client), do: command(client, "byom_create_project")
+
+  def write_project_file(client, project, path, text),
+    do:
+      command(client, "byom_write_project_file", %{
+        project_id: project["project_id"],
+        path: path,
+        text: text
+      })
+
+  def remove_project(client, project),
+    do: command(client, "byom_remove_project", %{project_id: project["project_id"]})
 
   @doc "Extracts the `session_id` from a session struct, session-start task, or result map."
   defdelegate extract_session(result), to: Result
@@ -298,7 +320,4 @@ defmodule IsabelleClient do
   defp unique_server_name do
     "isabelle_elixir_#{System.unique_integer([:positive])}"
   end
-
-  defp default_master_dir(client, opts),
-    do: Map.get(opts, "master_dir") || Session.default_master_dir(Session.active(client), opts)
 end

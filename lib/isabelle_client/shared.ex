@@ -24,9 +24,9 @@ defmodule IsabelleClient.Shared do
   @doc """
   Starts a GenServer-backed Isabelle client.
 
-  Pass `:password`, `:host`, and `:port` to connect to an existing Isabelle
-  server. Without `:password`, a local server is started. Pass `:session` to
-  start an initial session.
+  Pass `:password` with `:host` and `:port`, or with `:url`, to connect to
+  an existing Isabelle server. Without `:password`, a local server is started.
+  Pass `:session` to start an initial session.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
 
@@ -149,7 +149,22 @@ defmodule IsabelleClient.Shared do
   or `:session_id` in the options to use another server session explicitly.
   """
   def check_text(server, theory, text, opts \\ [], timeout \\ :infinity) do
-    GenServer.call(server, {:check_text, theory, text, opts, timeout}, call_timeout(timeout))
+    case GenServer.call(server, {:check_text, theory, text, opts, timeout}, call_timeout(timeout)) do
+      {:remote, client} ->
+        with {:ok, args} <-
+               IsabelleClient.Files.prepare(client, theory, text, opts, &command(server, &1, &2)) do
+          use_theories(server, args, timeout)
+        end
+
+      result ->
+        result
+    end
+  end
+
+  @doc "Places text in a session; remote paths are relative."
+  def write_file(server, path, text, opts \\ []) do
+    client = GenServer.call(server, :file_context)
+    IsabelleClient.Files.write(client, path, text, opts, &command(server, &1, &2))
   end
 
   @impl true
@@ -228,12 +243,16 @@ defmodule IsabelleClient.Shared do
 
   def handle_call({:check_text, theory, text, opts, timeout}, from, state) do
     require_session_args(state, opts, fn %{client: client} = state ->
-      opts = Arguments.normalize(opts)
-      args = Theory.write_args(theory, text, opts, default_master_dir(client, opts))
-
-      enqueue_async(state, from, :use_theories, args, timeout, [])
+      if IsabelleClient.Transport.remote?(client.socket) do
+        {:reply, {:remote, client}, state}
+      else
+        {:ok, args} = IsabelleClient.Files.prepare(client, theory, text, opts, nil)
+        enqueue_async(state, from, :use_theories, args, timeout, [])
+      end
     end)
   end
+
+  def handle_call(:file_context, _from, state), do: {:reply, state.client, state}
 
   @impl true
   def handle_info({:isabelle_response, response}, state), do: handle_response(response, state)
@@ -417,9 +436,6 @@ defmodule IsabelleClient.Shared do
   defp normalize_arg(nil), do: nil
   defp normalize_arg(arg), do: Arguments.normalize(arg)
 
-  defp default_master_dir(client, opts),
-    do: Map.get(opts, "master_dir") || Session.default_master_dir(Session.active(client), opts)
-
   defp command_timer({:sync, timeout}, ref), do: timer({:command_timeout, ref}, timeout)
 
   defp command_timer({:async, _action, timeout, _opts}, ref),
@@ -484,7 +500,13 @@ defmodule IsabelleClient.Shared do
     connect_timeout = Keyword.get(opts, :connect_timeout, Keyword.get(opts, :timeout, 30_000))
 
     with {:ok, client} <-
-           IsabelleClient.connect(password, host: host, port: port, timeout: connect_timeout) do
+           IsabelleClient.connect(
+             password,
+             Keyword.merge(
+               [host: host, port: port, timeout: connect_timeout],
+               Keyword.take(opts, [:url])
+             )
+           ) do
       maybe_start_session(client, opts)
     end
   end
@@ -514,7 +536,7 @@ defmodule IsabelleClient.Shared do
         end
       end)
 
-    with :ok <- :gen_tcp.controlling_process(socket, reader) do
+    with :ok <- IsabelleClient.Transport.controlling_process(socket, reader) do
       send(reader, :go)
       {:ok, reader}
     end
@@ -525,9 +547,6 @@ defmodule IsabelleClient.Shared do
       {:ok, response} ->
         send(parent, {:isabelle_response, response})
         reader_loop(socket, parent)
-
-      {:error, :closed} ->
-        :ok
 
       {:error, reason} ->
         send(parent, {:isabelle_reader_error, reason})

@@ -58,6 +58,7 @@ defmodule Isabelle.MixProject do
   # ------------ Dependencies ----------------------------------------------
   defp deps do
     [
+      {:websockex, "~> 0.5.1"},
       {:ex_doc, "~> 0.31", only: :dev, runtime: false}
     ]
   end

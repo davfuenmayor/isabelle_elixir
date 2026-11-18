@@ -19,7 +19,7 @@ Local server helpers need the Isabelle executable. Set `ISABELLE_TOOL` when
 export ISABELLE_TOOL=/path/to/Isabelle2025-2/bin/isabelle
 ```
 
-## Which Client?
+## Client profiles
 
 Start with `IsabelleClient` (see corresponding livebook tutorial). It owns one socket and keeps a local LIFO stack of
 sessions, with the most recently started session treated as active.
@@ -32,7 +32,7 @@ currently closed conservatively (reusing the socket before the stale reply is ha
 Use `IsabelleClient.Raw` when you want protocol-level control: explicit socket
 ownership, explicit session ids, and explicit task waiting.
 
-## Quick Start
+## Usage example
 
 ```elixir
 {:ok, server} = IsabelleClient.start_server()
@@ -93,6 +93,20 @@ already reachable, connect with its password, host, and port:
 ```
 
 The same applies to `IsabelleClient.Shared` and `IsabelleClient.Raw`.
+
+For an [Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom) deployment, pass its HTTPS/WSS URL and native password:
+
+```elixir
+{:ok, client} = IsabelleClient.connect(password, url: "https://isabelle.example.org/isabelle")
+# Or: IsabelleClient.Shared.connect(password: password, url: url)
+```
+
+Remote URLs use certificate-verified WebSockets; loopback URLs use native TCP
+and assume an already running local server. Explicit host/port APIs remain TCP.
+`check_text` and TPTP loading place sources remotely. Use `write_file` for
+session-owned text, or the separate `create_project` / `write_project_file` /
+`remove_project` helpers for sources needed before a session exists. Server
+paths are not local files in the Livebook runtime.
 
 ## Sessions
 

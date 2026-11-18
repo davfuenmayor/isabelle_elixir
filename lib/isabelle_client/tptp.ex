@@ -28,9 +28,15 @@ defmodule IsabelleClient.TPTP do
   def load(%IsabelleClient{} = client, timeout \\ :infinity) do
     with %Session{tmp_dir: tmp_dir} when is_binary(tmp_dir) <-
            IsabelleClient.active_session(client) do
-      File.mkdir_p!(tmp_dir)
-      File.write!(Path.join(tmp_dir, "#{@theory}.thy"), source_text())
-      IsabelleClient.use_theories(client, [theories: [@theory], master_dir: tmp_dir], timeout)
+      if IsabelleClient.Transport.remote?(client.socket) do
+        with {:ok, path} <- IsabelleClient.write_file(client, "#{@theory}.thy", source_text()) do
+          IsabelleClient.check_file(client, path, [], timeout)
+        end
+      else
+        File.mkdir_p!(tmp_dir)
+        File.write!(Path.join(tmp_dir, "#{@theory}.thy"), source_text())
+        IsabelleClient.use_theories(client, [theories: [@theory], master_dir: tmp_dir], timeout)
+      end
     else
       _ -> {:error, :no_session}
     end
@@ -42,7 +48,7 @@ defmodule IsabelleClient.TPTP do
   Prefer this over `source_path/0`: it works regardless of how the caller is
   packaged, whereas `source_path/0` points into `priv/` and so only resolves
   for a normal Mix build.
-  """  
+  """
   def source_text, do: @source_text
 
   @doc false

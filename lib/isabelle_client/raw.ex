@@ -34,30 +34,49 @@ defmodule IsabelleClient.Raw do
   or another Isabelle server process reachable on the network.
   """
   def connect(password, host \\ @default_host, port \\ @default_port, timeout \\ @timeout) do
-    with {:ok, socket} <-
-           :gen_tcp.connect(
-             to_charlist(host),
-             port,
-             [:binary, active: false, nodelay: true],
-             timeout
-           ),
-         :ok <- Protocol.send(socket, Protocol.line_message(password)),
-         {:ok, %Response{type: :ok}} <- Protocol.recv(socket, timeout) do
-      {:ok, socket}
-    else
-      {:ok, response} -> {:error, {:authentication_failed, response}}
-      {:error, _} = error -> error
+    with {:ok, socket} <- IsabelleClient.Transport.connect(host, port, timeout) do
+      authenticate(socket, password, timeout)
     end
   end
 
-  @doc "Closes a raw TCP socket."
-  def close(socket) when is_port(socket), do: :gen_tcp.close(socket)
+  @doc """
+  Connects using a loopback TCP URL or a remote HTTPS/WSS
+  [Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom) URL.
+  """
+  def connect_url(url, password, timeout \\ @timeout) do
+    with {:ok, socket} <- IsabelleClient.Transport.connect(url, timeout) do
+      authenticate(socket, password, timeout)
+    end
+  end
+
+  defp authenticate(socket, password, timeout) do
+    result =
+      with :ok <- Protocol.send(socket, Protocol.line_message(password)),
+           {:ok, %Response{type: :ok}} <- Protocol.recv(socket, timeout),
+           do: {:ok, socket}
+
+    case result do
+      {:ok, ^socket} ->
+        result
+
+      other ->
+        IsabelleClient.Transport.close(socket)
+
+        case other do
+          {:error, _} -> other
+          {:ok, response} -> {:error, {:authentication_failed, response}}
+        end
+    end
+  end
+
+  @doc "Closes a raw connection."
+  def close(socket), do: IsabelleClient.Transport.close(socket)
 
   @doc "Receives one framed Isabelle server response from a raw socket."
-  def recv(socket, timeout \\ @timeout) when is_port(socket), do: Protocol.recv(socket, timeout)
+  def recv(socket, timeout \\ @timeout), do: Protocol.recv(socket, timeout)
 
   @doc "Runs a synchronous Isabelle command and returns `{:ok, body}` or `{:error, body}`."
-  def command(socket, name, arg \\ nil, timeout \\ @timeout) when is_port(socket) do
+  def command(socket, name, arg \\ nil, timeout \\ @timeout) do
     with :ok <- Protocol.send(socket, Protocol.command(name, normalize_arg(arg))),
          {:ok, response} <- recv_command_response(socket, deadline(timeout)) do
       Protocol.ok_body(response)
@@ -74,7 +93,7 @@ defmodule IsabelleClient.Raw do
   def shutdown_server(socket), do: command(socket, "shutdown")
 
   @doc "Requests cancellation of an Isabelle asynchronous task by task id."
-  def cancel_task(socket, task_id) when is_port(socket),
+  def cancel_task(socket, task_id),
     do: command(socket, "cancel", %{"task" => task_id}, @timeout)
 
   @doc """
@@ -86,7 +105,7 @@ defmodule IsabelleClient.Raw do
   Pending `NOTE` frames from earlier tasks are skipped while waiting for the
   command acknowledgement.
   """
-  def async_command(socket, name, arg, timeout \\ @timeout) when is_port(socket) do
+  def async_command(socket, name, arg, timeout \\ @timeout) do
     with :ok <- Protocol.send(socket, Protocol.command(name, normalize_arg(arg))),
          {:ok, response} <- recv_command_response(socket, deadline(timeout)),
          {:ok, task_id} <- Protocol.task_id(response) do
@@ -102,11 +121,11 @@ defmodule IsabelleClient.Raw do
   """
   def await_task(socket, task_or_id, timeout \\ :infinity)
 
-  def await_task(socket, %Task{id: id} = task, timeout) when is_port(socket) do
+  def await_task(socket, %Task{id: id} = task, timeout) do
     await_task(socket, id, timeout, task)
   end
 
-  def await_task(socket, task_id, timeout) when is_port(socket) and is_binary(task_id) do
+  def await_task(socket, task_id, timeout) when is_binary(task_id) do
     await_task(socket, task_id, timeout, Task.new(task_id))
   end
 
@@ -115,7 +134,7 @@ defmodule IsabelleClient.Raw do
   end
 
   @doc "Starts a `session_build` task and returns its task handle."
-  def build_session(socket, args, timeout \\ @timeout) when is_port(socket),
+  def build_session(socket, args, timeout \\ @timeout),
     do: async_command(socket, "session_build", args, timeout)
 
   @doc """
@@ -125,17 +144,17 @@ defmodule IsabelleClient.Raw do
   arguments (`:session`, `:preferences`, `:options`, `:dirs`,
   `:include_sessions`, `:verbose`) plus `:print_mode`.
   """
-  def start_session(socket, args, timeout \\ @timeout) when is_port(socket),
+  def start_session(socket, args, timeout \\ @timeout),
     do: async_command(socket, "session_start", args, timeout)
 
   @doc "Starts a `session_stop` task for a session struct or session id."
   def stop_session(socket, session_or_id, timeout \\ @timeout)
 
-  def stop_session(socket, %Session{id: session_id}, timeout) when is_port(socket),
+  def stop_session(socket, %Session{id: session_id}, timeout),
     do: stop_session(socket, session_id, timeout)
 
   def stop_session(socket, session_id, timeout)
-      when is_port(socket) and is_binary(session_id),
+      when is_binary(session_id),
       do: async_command(socket, "session_stop", %{"session_id" => session_id}, timeout)
 
   @doc """
@@ -146,11 +165,11 @@ defmodule IsabelleClient.Raw do
   `:export_pattern`, `:check_delay`, `:check_limit`, `:watchdog_timeout`, and
   `:nodes_status_delay`.
   """
-  def use_theories(socket, args, timeout \\ @timeout) when is_port(socket),
+  def use_theories(socket, args, timeout \\ @timeout),
     do: async_command(socket, "use_theories", args, timeout)
 
   @doc "Runs Isabelle's synchronous `purge_theories` command."
-  def purge_theories(socket, args, timeout \\ @timeout) when is_port(socket),
+  def purge_theories(socket, args, timeout \\ @timeout),
     do: command(socket, "purge_theories", args, timeout)
 
   @doc "Alias for `await_task/3`."

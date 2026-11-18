@@ -26,7 +26,7 @@ defmodule IsabelleClient.Protocol do
     end
   end
 
-  def send(socket, iodata), do: :gen_tcp.send(socket, iodata)
+  def send(socket, iodata), do: IsabelleClient.Transport.send(socket, iodata)
 
   def recv(socket, timeout \\ @timeout) do
     deadline = deadline(timeout)
@@ -35,6 +35,10 @@ defmodule IsabelleClient.Protocol do
          {:ok, raw, length} <- read_body(socket, line, deadline) do
       parse(raw, length)
     end
+  catch
+    :response_too_large ->
+      IsabelleClient.Transport.close(socket)
+      {:error, :response_too_large}
   end
 
   def parse(raw, length \\ nil) when is_binary(raw) do
@@ -61,6 +65,9 @@ defmodule IsabelleClient.Protocol do
     if digits?(line) do
       length = String.to_integer(line)
 
+      if IsabelleClient.Transport.remote?(socket) and length > 16 * 1024 * 1024,
+        do: throw(:response_too_large)
+
       with {:ok, data} <- recv_exact(socket, length, deadline) do
         {:ok, String.trim_trailing(data, "\n"), length}
       end
@@ -70,7 +77,7 @@ defmodule IsabelleClient.Protocol do
   end
 
   defp recv_line(socket, deadline, acc \\ []) do
-    case :gen_tcp.recv(socket, 1, remaining(deadline)) do
+    case IsabelleClient.Transport.recv(socket, 1, remaining(deadline)) do
       {:ok, "\n"} -> {:ok, acc |> IO.iodata_to_binary() |> String.trim_trailing("\r")}
       {:ok, byte} -> recv_line(socket, deadline, [acc, byte])
       {:error, reason} -> {:error, reason}
@@ -81,7 +88,7 @@ defmodule IsabelleClient.Protocol do
   defp recv_exact(_socket, 0, _deadline, acc), do: {:ok, IO.iodata_to_binary(acc)}
 
   defp recv_exact(socket, length, deadline, acc) do
-    case :gen_tcp.recv(socket, length, remaining(deadline)) do
+    case IsabelleClient.Transport.recv(socket, length, remaining(deadline)) do
       {:ok, data} -> recv_exact(socket, length - byte_size(data), deadline, [acc, data])
       {:error, reason} -> {:error, reason}
     end
