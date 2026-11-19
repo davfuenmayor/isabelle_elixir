@@ -55,6 +55,36 @@ defmodule IsabelleProtocolTest do
               }}
   end
 
+  test "frames native YXML arguments and preserves YXML replies" do
+    argument = "\x05\x06example\x06id=some-id\x05hello\x05\x06\x05"
+
+    assert IO.iodata_to_binary(Protocol.command("echo", {:yxml, argument})) ==
+             "echo " <> argument <> "\n"
+
+    assert {:ok, %Response{type: :ok, body: {:yxml, ^argument}}} =
+             Protocol.parse("OK " <> argument)
+
+    payload = "\x05\x06example\x05one\rtwo\x05\x06\x05"
+    message = "echo " <> payload <> "\n"
+
+    assert IO.iodata_to_binary(Protocol.command("echo", {:yxml, payload})) ==
+             "#{byte_size(message)}\n" <> message
+  end
+
+  test "explicit command formats distinguish empty JSON values from no argument" do
+    for {value, encoded} <- [{"", ~s("")}, {[], "[]"}] do
+      {arg, 1_000} = Protocol.command_options(value, [format: :json, timeout: 1_000], 30_000)
+      assert IO.iodata_to_binary(Protocol.command("echo", arg)) == "echo " <> encoded <> "\n"
+    end
+
+    {arg, 30_000} = Protocol.command_options(nil, [format: :json], 30_000)
+    assert IO.iodata_to_binary(Protocol.command("help", arg)) == "help\n"
+
+    assert_raise ArgumentError, ~r/expected a pre-encoded YXML element/, fn ->
+      Protocol.command_options("plain text", [], 30_000)
+    end
+  end
+
   test "reports malformed and unknown responses" do
     assert Protocol.parse("") == {:error, {:malformed_response, ""}}
     assert Protocol.parse("BOGUS {}") == {:error, {:unknown_response, "BOGUS"}}

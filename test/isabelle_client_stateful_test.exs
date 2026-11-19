@@ -163,8 +163,7 @@ defmodule IsabelleClientStatefulTest do
     IsabelleTestSupport.with_server("stateful", fn server ->
       assert {:ok, client} =
                IsabelleClient.connect(server["password"],
-                 host: server["host"],
-                 port: server["port"]
+                 url: "tcp://127.0.0.1:#{server["port"]}"
                )
 
       assert %IsabelleClient{sessions: []} = client
@@ -176,9 +175,13 @@ defmodule IsabelleClientStatefulTest do
       IsabelleTestSupport.assert_commands(commands)
 
       assert {:ok, %{"client" => "stateful"}} =
-               IsabelleClient.command(client, "echo", client: "stateful")
+               IsabelleClient.command(client, "echo", [client: "stateful"], format: :json)
 
-      assert {:ok, "stateful string"} = IsabelleClient.echo(client, "stateful string")
+      assert {:ok, "stateful string"} =
+               IsabelleClient.echo(client, "stateful string", format: :json)
+
+      yxml = "\x05\x06example\x05λ\x05\x06\x05"
+      assert {:ok, {:yxml, ^yxml}} = IsabelleClient.command(client, "echo", yxml)
 
       assert {:ok, %Task{status: :finished, result: %{"ok" => true}}} =
                IsabelleClient.build_session(
@@ -200,6 +203,11 @@ defmodule IsabelleClientStatefulTest do
       assert active_session.args == %{"session" => "HOL"}
       assert active_session.label == nil
       assert start_task.result["session_id"] == active_session.id
+
+      text = "λ\x05\x06\n"
+      assert {:ok, path} = IsabelleClient.write_file(client, "local.txt", text)
+      assert path == Path.join(active_session.tmp_dir, "local.txt")
+      assert File.read!(path) == text
 
       theory_text =
         ~s(lemma "x = x"\n  sledgehammer\n  by simp\n\nlemma "xs @ [] = xs"\n  sledgehammer\n  by simp)

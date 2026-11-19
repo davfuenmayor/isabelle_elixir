@@ -48,8 +48,8 @@ defmodule IsabelleClient do
 
   Pass a `%IsabelleClient.Server.Info{}` returned by `start_server/1`, or pass
   the server password with explicit `:host` and `:port` options for an already
-  running local or remote server. Pass `:url` for an HTTPS/WSS
-  [Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom) endpoint.
+  running server. Pass `:url` for a loopback TCP address or an HTTPS/WSS
+  address that tunnels the Isabelle server protocol.
   """
   def connect(server_or_password, opts \\ [])
 
@@ -81,12 +81,15 @@ defmodule IsabelleClient do
   @doc "Closes the client connection."
   def close(%__MODULE__{socket: socket}), do: Raw.close(socket)
 
-  @doc "Runs a synchronous Isabelle command, normalizing Elixir keyword arguments to JSON keys."
-  def command(%__MODULE__{socket: socket}, name, arg \\ nil, timeout \\ @timeout),
-    do: Raw.command(socket, name, arg, timeout)
+  @doc """
+  Runs a synchronous Isabelle command. Pass `format: :json` or `format: :yxml`
+  in the fourth argument. See `IsabelleClient.Raw.command/4` for encoding and timeout options.
+  """
+  def command(%__MODULE__{socket: socket}, name, arg \\ nil, opts \\ []),
+    do: Raw.command(socket, name, arg, opts)
 
-  @doc "Round-trips a JSON value through Isabelle's `echo` command."
-  def echo(client, value), do: command(client, "echo", value)
+  @doc "Round-trips a value through Isabelle's `echo` command. Accepts the same options as `command/4`."
+  def echo(client, value, opts \\ []), do: command(client, "echo", value, opts)
 
   @doc "Returns the server command names supported by Isabelle."
   def help(client), do: command(client, "help")
@@ -250,19 +253,20 @@ defmodule IsabelleClient do
   def write_file(client, path, text, opts \\ []),
     do: IsabelleClient.Files.write(client, path, text, opts, &command(client, &1, &2))
 
-  @doc "Creates independently owned remote project sources; remove after all users stop."
-  def create_project(client), do: command(client, "byom_create_project")
+  @doc """
+  Creates remote project sources before a session is started.
+
+  Requires the server's optional file-placement commands. Release the project
+  after every build and session using its files has stopped.
+  """
+  def create_project(client),
+    do: IsabelleClient.Files.Remote.create_project(&command(client, &1, &2))
 
   def write_project_file(client, project, path, text),
-    do:
-      command(client, "byom_write_project_file", %{
-        project_id: project["project_id"],
-        path: path,
-        text: text
-      })
+    do: IsabelleClient.Files.Remote.write_project(project, path, text, &command(client, &1, &2))
 
   def remove_project(client, project),
-    do: command(client, "byom_remove_project", %{project_id: project["project_id"]})
+    do: IsabelleClient.Files.Remote.remove_project(project, &command(client, &1, &2))
 
   @doc "Extracts the `session_id` from a session struct, session-start task, or result map."
   defdelegate extract_session(result), to: Result

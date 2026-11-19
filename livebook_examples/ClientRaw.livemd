@@ -86,9 +86,9 @@ Using the socket connection we can invoke some synchronous ("sessionless") comma
 {:ok, commands} = IsabelleClient.Raw.help(socket)
 
 payload = %{client: "raw", framed: String.duplicate("x", 120)}
-{:ok, %{"client" => "raw", "framed" => framed}} = IsabelleClient.Raw.echo(socket, payload)
+{:ok, %{"client" => "raw", "framed" => framed}} = IsabelleClient.Raw.echo(socket, payload, format: :json)
 
-{:ok, %{"via" => "command/4"}} = IsabelleClient.Raw.command(socket, "echo", %{via: "command/4"})
+{:ok, %{"via" => "command/4"}} = IsabelleClient.Raw.command(socket, "echo", %{via: "command/4"}, format: :json)
 ```
 
 `command/4` is the escape hatch for server commands without a dedicated helper.
@@ -108,7 +108,10 @@ collect `NOTE` messages and the final `FINISHED` or `FAILED` payload.
 
 ```elixir
 {:ok, build_task} =
-  IsabelleClient.Raw.async_command(socket, "session_build", session: "HOL", verbose: true)
+  IsabelleClient.Raw.async_command(socket, "session_build",
+    [session: "HOL", verbose: true],
+    format: :json
+  )
 
 {:ok, build_task} = IsabelleClient.Raw.await_task(socket, build_task, 120_000)
 

@@ -8,10 +8,32 @@ defmodule IsabelleClient.Protocol do
 
   @timeout 30_000
 
+  def command_options(arg, opts, default_timeout) when is_list(opts) do
+    format = Keyword.get(opts, :format, :yxml)
+    {command_arg(arg, format), Keyword.get(opts, :timeout, default_timeout)}
+  end
+
+  def command_options(arg, timeout, _default_timeout), do: {command_arg(arg, :yxml), timeout}
+
+  defp command_arg(nil, format) when format in [:json, :yxml], do: nil
+  defp command_arg({:yxml, payload}, :yxml), do: command_arg(payload, :yxml)
+  defp command_arg(<<"\x05\x06", _::binary>> = payload, :yxml), do: {:yxml, payload}
+
+  defp command_arg(_, :yxml),
+    do: raise(ArgumentError, "expected a pre-encoded YXML element or format: :json")
+
+  defp command_arg({:yxml, _}, :json),
+    do: raise(ArgumentError, "expected a JSON argument, got YXML")
+
+  defp command_arg(arg, :json), do: {:json, arg}
+
+  defp command_arg(_, format),
+    do: raise(ArgumentError, "unsupported command format: #{inspect(format)}")
+
   def line_message(data) when is_binary(data) do
     size = byte_size(data)
 
-    if size > 100 or String.contains?(data, "\n") or digits?(data) do
+    if size > 100 or String.contains?(data, ["\r", "\n"]) or digits?(data) do
       [Integer.to_string(size + 1), "\n", data, "\n"]
     else
       [data, "\n"]
@@ -22,9 +44,15 @@ defmodule IsabelleClient.Protocol do
     case arg do
       nil -> line_message(name)
       "" -> line_message(name)
-      arg -> line_message(name <> " " <> JSON.encode!(arg))
+      {:json, []} -> line_message(name <> " []")
+      {:json, value} -> json_command(name, value)
+      {:yxml, payload} -> line_message(name <> " " <> payload)
+      arg -> json_command(name, arg)
     end
   end
+
+  defp json_command(name, arg),
+    do: line_message(name <> " " <> JSON.encode!(IsabelleClient.Arguments.normalize(arg)))
 
   def send(socket, iodata), do: IsabelleClient.Transport.send(socket, iodata)
 
@@ -65,7 +93,7 @@ defmodule IsabelleClient.Protocol do
     if digits?(line) do
       length = String.to_integer(line)
 
-      if IsabelleClient.Transport.remote?(socket) and length > 16 * 1024 * 1024,
+      if IsabelleClient.Transport.websocket?(socket) and length > 16 * 1024 * 1024,
         do: throw(:response_too_large)
 
       with {:ok, data} <- recv_exact(socket, length, deadline) do
@@ -94,28 +122,26 @@ defmodule IsabelleClient.Protocol do
     end
   end
 
-  defp deadline(:infinity), do: :infinity
-  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
+  def deadline(:infinity), do: :infinity
+  def deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
 
-  defp remaining(:infinity), do: :infinity
+  def remaining(:infinity), do: :infinity
 
-  defp remaining(deadline) do
+  def remaining(deadline) do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
   defp split_name(raw) do
-    name = raw |> String.to_charlist() |> Enum.take_while(&name_char?/1) |> to_string()
-
-    body =
-      raw
-      |> binary_part(byte_size(name), byte_size(raw) - byte_size(name))
-      |> String.trim_leading()
-
-    {name, body}
+    size = name_size(raw, 0)
+    <<name::binary-size(^size), body::binary>> = raw
+    {name, String.trim_leading(body)}
   end
 
-  defp name_char?(char),
-    do: char in ?a..?z or char in ?A..?Z or char in ?0..?9 or char in [?_, ?.]
+  defp name_size(<<char, rest::binary>>, size)
+       when char in ?a..?z or char in ?A..?Z or char in ?0..?9 or char in [?_, ?.],
+       do: name_size(rest, size + 1)
+
+  defp name_size(_, size), do: size
 
   defp response_type("OK"), do: {:ok, :ok}
   defp response_type("ERROR"), do: {:ok, :error}
@@ -126,6 +152,8 @@ defmodule IsabelleClient.Protocol do
 
   defp decode_body(""), do: {:ok, nil}
 
+  defp decode_body(<<"\x05\x06", _::binary>> = body), do: {:ok, {:yxml, body}}
+
   defp decode_body(body) do
     case JSON.decode(body) do
       {:ok, value} -> {:ok, value}
@@ -134,5 +162,9 @@ defmodule IsabelleClient.Protocol do
   end
 
   defp digits?(""), do: false
-  defp digits?(data), do: data |> String.to_charlist() |> Enum.all?(&(&1 in ?0..?9))
+  defp digits?(data), do: digit_suffix?(data)
+
+  defp digit_suffix?(<<char, rest::binary>>) when char in ?0..?9, do: digit_suffix?(rest)
+  defp digit_suffix?(""), do: true
+  defp digit_suffix?(_), do: false
 end

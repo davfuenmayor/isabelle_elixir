@@ -1,16 +1,12 @@
 defmodule IsabelleClient.Files do
   @moduledoc false
   alias IsabelleClient.{Arguments, Session, Theory, Transport}
+  alias IsabelleClient.Files.Remote
 
   def write(client, path, text, opts, command) do
-    if Transport.remote?(client.socket) do
-      with {:ok, args} <- session_args(client, opts),
-           {:ok, %{"path" => remote}} <-
-             command.("byom_write_file", Map.merge(args, %{"path" => path, "text" => text})) do
-        {:ok, remote}
-      else
-        :error -> {:error, :no_session}
-        other -> other
+    if Transport.websocket?(client.socket) do
+      with {:ok, args} <- session_args(client, opts) do
+        Remote.write_session(command, args["session_id"], path, text)
       end
     else
       opts = Arguments.normalize(opts)
@@ -31,20 +27,16 @@ defmodule IsabelleClient.Files do
   def prepare(client, theory, text, opts, command) do
     opts = Arguments.normalize(opts)
 
-    if Transport.remote?(client.socket) do
+    if Transport.websocket?(client.socket) do
       with {:ok, opts} <- session_args(client, opts),
            {:ok, path} <-
-             write(
-               client,
+             Remote.write_session(
+               command,
+               opts["session_id"],
                Theory.file(theory),
-               Theory.source(theory, text, Map.get(opts, "imports", "Main")),
-               opts,
-               command
+               Theory.source(theory, text, Map.get(opts, "imports", "Main"))
              ) do
         {:ok, Theory.file_args(path, Map.drop(opts, ["imports", "master_dir"]))}
-      else
-        :error -> {:error, :no_session}
-        error -> error
       end
     else
       dir =
@@ -54,5 +46,10 @@ defmodule IsabelleClient.Files do
     end
   end
 
-  defp session_args(client, opts), do: Session.put_id(opts, Session.active_id(client))
+  defp session_args(client, opts) do
+    case Session.put_id(opts, Session.active_id(client)) do
+      :error -> {:error, :no_session}
+      result -> result
+    end
+  end
 end

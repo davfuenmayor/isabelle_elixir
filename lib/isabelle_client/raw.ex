@@ -7,7 +7,6 @@ defmodule IsabelleClient.Raw do
   understanding Isabelle server messages directly.
   """
 
-  alias IsabelleClient.Arguments
   alias IsabelleClient.Protocol
   alias IsabelleClient.Protocol.Response
   alias IsabelleClient.Server
@@ -32,6 +31,11 @@ defmodule IsabelleClient.Raw do
 
   Use the server password plus host/port from `new_server/2`, `list_servers/0`,
   or another Isabelle server process reachable on the network.
+
+  A close before authentication succeeds returns
+  `{:error, {:authentication_failed, :closed}}`. Check the password and server
+  status: native Isabelle closes the connection without a reply for an invalid
+  password, and a server restart can also interrupt authentication.
   """
   def connect(password, host \\ @default_host, port \\ @default_port, timeout \\ @timeout) do
     with {:ok, socket} <- IsabelleClient.Transport.connect(host, port, timeout) do
@@ -40,8 +44,8 @@ defmodule IsabelleClient.Raw do
   end
 
   @doc """
-  Connects using a loopback TCP URL or a remote HTTPS/WSS
-  [Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom) URL.
+  Connects using a loopback TCP URL or an HTTPS/WSS tunnel that carries
+  the Isabelle server protocol.
   """
   def connect_url(url, password, timeout \\ @timeout) do
     with {:ok, socket} <- IsabelleClient.Transport.connect(url, timeout) do
@@ -63,6 +67,7 @@ defmodule IsabelleClient.Raw do
         IsabelleClient.Transport.close(socket)
 
         case other do
+          {:error, :closed} -> {:error, {:authentication_failed, :closed}}
           {:error, _} -> other
           {:ok, response} -> {:error, {:authentication_failed, response}}
         end
@@ -75,16 +80,27 @@ defmodule IsabelleClient.Raw do
   @doc "Receives one framed Isabelle server response from a raw socket."
   def recv(socket, timeout \\ @timeout), do: Protocol.recv(socket, timeout)
 
-  @doc "Runs a synchronous Isabelle command and returns `{:ok, body}` or `{:error, body}`."
-  def command(socket, name, arg \\ nil, timeout \\ @timeout) do
-    with :ok <- Protocol.send(socket, Protocol.command(name, normalize_arg(arg))),
-         {:ok, response} <- recv_command_response(socket, deadline(timeout)) do
+  @doc """
+  Runs a synchronous Isabelle command and returns `{:ok, body}` or `{:error, body}`.
+
+  The fourth argument accepts options. The default format is `:yxml` and
+  takes a pre-encoded YXML element. Pass `format: :json` for JSON arguments.
+  A bare timeout in milliseconds or `:infinity` is also accepted. In an
+  options list, set it with `:timeout`. Existing `{:yxml, binary}` arguments
+  still select YXML when no format is given. YXML replies return as
+  `{:yxml, binary}` regardless of the request format.
+  """
+  def command(socket, name, arg \\ nil, opts \\ []) do
+    {arg, timeout} = Protocol.command_options(arg, opts, @timeout)
+
+    with :ok <- Protocol.send(socket, Protocol.command(name, arg)),
+         {:ok, response} <- recv_command_response(socket, Protocol.deadline(timeout)) do
       Protocol.ok_body(response)
     end
   end
 
-  @doc "Round-trips a JSON value through Isabelle's `echo` command."
-  def echo(socket, value), do: command(socket, "echo", value)
+  @doc "Round-trips a value through Isabelle's `echo` command. Accepts the same options as `command/4`."
+  def echo(socket, value, opts \\ []), do: command(socket, "echo", value, opts)
 
   @doc "Returns the server command names supported by Isabelle."
   def help(socket), do: command(socket, "help")
@@ -94,10 +110,12 @@ defmodule IsabelleClient.Raw do
 
   @doc "Requests cancellation of an Isabelle asynchronous task by task id."
   def cancel_task(socket, task_id),
-    do: command(socket, "cancel", %{"task" => task_id}, @timeout)
+    do: command(socket, "cancel", %{"task" => task_id}, format: :json)
 
   @doc """
   Sends an async command and returns a running `%IsabelleClient.Task{}`.
+
+  Accepts the same format and timeout options as `command/4`.
 
   Use `await_task/3` to collect later `NOTE` messages and the final
   `FINISHED` or `FAILED` response.
@@ -105,9 +123,11 @@ defmodule IsabelleClient.Raw do
   Pending `NOTE` frames from earlier tasks are skipped while waiting for the
   command acknowledgement.
   """
-  def async_command(socket, name, arg, timeout \\ @timeout) do
-    with :ok <- Protocol.send(socket, Protocol.command(name, normalize_arg(arg))),
-         {:ok, response} <- recv_command_response(socket, deadline(timeout)),
+  def async_command(socket, name, arg, opts \\ []) do
+    {arg, timeout} = Protocol.command_options(arg, opts, @timeout)
+
+    with :ok <- Protocol.send(socket, Protocol.command(name, arg)),
+         {:ok, response} <- recv_command_response(socket, Protocol.deadline(timeout)),
          {:ok, task_id} <- Protocol.task_id(response) do
       {:ok, Task.new(task_id)}
     end
@@ -130,12 +150,12 @@ defmodule IsabelleClient.Raw do
   end
 
   defp await_task(socket, task_id, timeout, task) when is_binary(task_id) do
-    do_await_task(socket, task, deadline(timeout))
+    do_await_task(socket, task, Protocol.deadline(timeout))
   end
 
   @doc "Starts a `session_build` task and returns its task handle."
   def build_session(socket, args, timeout \\ @timeout),
-    do: async_command(socket, "session_build", args, timeout)
+    do: async_command(socket, "session_build", args, format: :json, timeout: timeout)
 
   @doc """
   Starts a `session_start` task and returns its task handle.
@@ -145,7 +165,7 @@ defmodule IsabelleClient.Raw do
   `:include_sessions`, `:verbose`) plus `:print_mode`.
   """
   def start_session(socket, args, timeout \\ @timeout),
-    do: async_command(socket, "session_start", args, timeout)
+    do: async_command(socket, "session_start", args, format: :json, timeout: timeout)
 
   @doc "Starts a `session_stop` task for a session struct or session id."
   def stop_session(socket, session_or_id, timeout \\ @timeout)
@@ -155,7 +175,11 @@ defmodule IsabelleClient.Raw do
 
   def stop_session(socket, session_id, timeout)
       when is_binary(session_id),
-      do: async_command(socket, "session_stop", %{"session_id" => session_id}, timeout)
+      do:
+        async_command(socket, "session_stop", %{"session_id" => session_id},
+          format: :json,
+          timeout: timeout
+        )
 
   @doc """
   Starts a `use_theories` task and returns its task handle.
@@ -166,18 +190,18 @@ defmodule IsabelleClient.Raw do
   `:nodes_status_delay`.
   """
   def use_theories(socket, args, timeout \\ @timeout),
-    do: async_command(socket, "use_theories", args, timeout)
+    do: async_command(socket, "use_theories", args, format: :json, timeout: timeout)
 
   @doc "Runs Isabelle's synchronous `purge_theories` command."
   def purge_theories(socket, args, timeout \\ @timeout),
-    do: command(socket, "purge_theories", args, timeout)
+    do: command(socket, "purge_theories", args, format: :json, timeout: timeout)
 
   @doc "Alias for `await_task/3`."
   def poll_status(socket, task_or_id, timeout \\ :infinity),
     do: await_task(socket, task_or_id, timeout)
 
   defp do_await_task(socket, %Task{id: id, notes: notes} = task, deadline) do
-    with {:ok, response} <- Protocol.recv(socket, remaining(deadline)) do
+    with {:ok, response} <- Protocol.recv(socket, Protocol.remaining(deadline)) do
       response_task = task_id(response.body)
 
       cond do
@@ -200,24 +224,12 @@ defmodule IsabelleClient.Raw do
   defp task_id(_), do: nil
 
   defp recv_command_response(socket, deadline) do
-    with {:ok, response} <- Protocol.recv(socket, remaining(deadline)) do
+    with {:ok, response} <- Protocol.recv(socket, Protocol.remaining(deadline)) do
       if response.type == :note do
         recv_command_response(socket, deadline)
       else
         {:ok, response}
       end
     end
-  end
-
-  defp normalize_arg(nil), do: nil
-  defp normalize_arg(arg), do: Arguments.normalize(arg)
-
-  defp deadline(:infinity), do: :infinity
-  defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout
-
-  defp remaining(:infinity), do: :infinity
-
-  defp remaining(deadline) do
-    max(deadline - System.monotonic_time(:millisecond), 0)
   end
 end

@@ -40,5 +40,5 @@ defmodule IsabelleClient.Transport do
   def controlling_process(socket, pid) when is_pid(socket), do: WebSocket.owner(socket, pid)
   def controlling_process(socket, pid), do: :gen_tcp.controlling_process(socket, pid)
 
-  def remote?(socket), do: is_pid(socket)
+  def websocket?(socket), do: is_pid(socket)
 end

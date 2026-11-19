@@ -36,12 +36,18 @@ defmodule IsabelleClient.Shared do
   @doc "Stops the client process and closes its socket."
   def close(server), do: GenServer.stop(server, :normal)
 
-  @doc "Runs a synchronous Isabelle command through the client process."
-  def command(server, name, arg \\ nil, timeout \\ @default_timeout),
-    do: GenServer.call(server, {:command, name, arg, timeout}, call_timeout(timeout))
+  @doc """
+  Runs a synchronous Isabelle command through the client process. Pass
+  `format: :json` or `format: :yxml` in the fourth argument. See
+  `IsabelleClient.Raw.command/4` for encoding and timeout options.
+  """
+  def command(server, name, arg \\ nil, opts \\ []) do
+    {arg, timeout} = Protocol.command_options(arg, opts, @default_timeout)
+    GenServer.call(server, {:command, name, arg, timeout}, call_timeout(timeout))
+  end
 
-  @doc "Round-trips a JSON value through Isabelle's `echo` command."
-  def echo(server, value), do: command(server, "echo", value)
+  @doc "Round-trips a value through Isabelle's `echo` command. Accepts the same options as `command/4`."
+  def echo(server, value, opts \\ []), do: command(server, "echo", value, opts)
 
   @doc "Returns the server command names supported by Isabelle."
   def help(server), do: command(server, "help")
@@ -243,7 +249,7 @@ defmodule IsabelleClient.Shared do
 
   def handle_call({:check_text, theory, text, opts, timeout}, from, state) do
     require_session_args(state, opts, fn %{client: client} = state ->
-      if IsabelleClient.Transport.remote?(client.socket) do
+      if IsabelleClient.Transport.websocket?(client.socket) do
         {:reply, {:remote, client}, state}
       else
         {:ok, args} = IsabelleClient.Files.prepare(client, theory, text, opts, nil)
@@ -300,7 +306,7 @@ defmodule IsabelleClient.Shared do
   end
 
   defp enqueue_command(%{client: client} = state, from, name, arg, kind) do
-    case Protocol.send(client.socket, Protocol.command(name, normalize_arg(arg))) do
+    case Protocol.send(client.socket, Protocol.command(name, arg)) do
       :ok ->
         ref = make_ref()
         request = %{ref: ref, from: from, kind: kind, timer: command_timer(kind, ref)}
@@ -432,9 +438,6 @@ defmodule IsabelleClient.Shared do
   defp command_name({:start_session, _args, _label}), do: "session_start"
   defp command_name(:use_theories), do: "use_theories"
   defp command_name({:stop_session, _session_id}), do: "session_stop"
-
-  defp normalize_arg(nil), do: nil
-  defp normalize_arg(arg), do: Arguments.normalize(arg)
 
   defp command_timer({:sync, timeout}, ref), do: timer({:command_timeout, ref}, timeout)
 

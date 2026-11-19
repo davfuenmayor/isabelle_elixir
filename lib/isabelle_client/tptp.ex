@@ -28,14 +28,8 @@ defmodule IsabelleClient.TPTP do
   def load(%IsabelleClient{} = client, timeout \\ :infinity) do
     with %Session{tmp_dir: tmp_dir} when is_binary(tmp_dir) <-
            IsabelleClient.active_session(client) do
-      if IsabelleClient.Transport.remote?(client.socket) do
-        with {:ok, path} <- IsabelleClient.write_file(client, "#{@theory}.thy", source_text()) do
-          IsabelleClient.check_file(client, path, [], timeout)
-        end
-      else
-        File.mkdir_p!(tmp_dir)
-        File.write!(Path.join(tmp_dir, "#{@theory}.thy"), source_text())
-        IsabelleClient.use_theories(client, [theories: [@theory], master_dir: tmp_dir], timeout)
+      with {:ok, path} <- IsabelleClient.write_file(client, "#{@theory}.thy", source_text()) do
+        IsabelleClient.check_file(client, path, [], timeout)
       end
     else
       _ -> {:error, :no_session}

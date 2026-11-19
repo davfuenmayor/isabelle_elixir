@@ -84,7 +84,7 @@ sync_tasks =
       case operation do
         {:echo, n} ->
           payload = %{client: "shared", n: n, framed: String.duplicate("#{n}", 120)}
-          {:ok, echoed} = IsabelleClient.Shared.echo(pid, payload)
+          {:ok, echoed} = IsabelleClient.Shared.echo(pid, payload, format: :json)
           {:echo, echoed["n"]}
 
         {:help, n} ->

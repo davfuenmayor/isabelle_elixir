@@ -86,13 +86,10 @@ keeps a LIFO stack of started sessions. The top session is the active session.
 
 `echo`, `help`, and `command` are synchronous Isabelle server commands.
 They are useful for smoke tests and for commands that do not create async
-Isabelle tasks. Note the automatic conversion between Elixir structs and JSON payloads.
+Isabelle tasks. The default format is YXML. Choose JSON explicitly to send an Elixir map.
 
 ```elixir
-IsabelleClient.echo(client, %{
-  label: "echo some map",
-  message: "hello world"
-})
+IsabelleClient.echo(client, %{label: "echo some map", message: "hello world"}, format: :json)
 ```
 
 ```elixir
@@ -101,7 +98,8 @@ commands
 ```
 
 ```elixir
-{:ok, result} = IsabelleClient.command(client, "echo", "some stuff")
+yxml = "\x05\x06example\x05hello world\x05\x06\x05"
+{:ok, {:yxml, result}} = IsabelleClient.command(client, "echo", yxml)
 result
 ```
 

@@ -45,11 +45,13 @@ defmodule IsabelleClient.SharedTest do
         :ok = :gen_tcp.send(socket, Protocol.command("OK", %{"reply" => "first"}))
       end)
 
-    assert {:error, :timeout} = Shared.command(pid, "echo", %{"request" => "first"}, 50)
+    assert {:error, :timeout} =
+             Shared.command(pid, "echo", %{"request" => "first"}, format: :json, timeout: 50)
+
     assert_receive {:command, :first, "echo {\"request\":\"first\"}"}
 
     assert {:error, {:connection_closed, :timeout}} =
-             Shared.command(pid, "echo", %{"request" => "second"}, 1_000)
+             Shared.command(pid, "echo", %{"request" => "second"}, format: :json, timeout: 1_000)
 
     refute_receive {:command, :second, _}
 
@@ -75,7 +77,7 @@ defmodule IsabelleClient.SharedTest do
     assert_receive {:command, :cancel, "cancel {\"task\":\"task-1\"}"}
 
     assert {:error, {:connection_closed, :timeout}} =
-             Shared.command(pid, "echo", %{"request" => "second"}, 1_000)
+             Shared.command(pid, "echo", %{"request" => "second"}, format: :json, timeout: 1_000)
 
     refute_receive {:command, :second, _}
 
@@ -95,7 +97,8 @@ defmodule IsabelleClient.SharedTest do
 
       assert {:error, :timeout} = Shared.start_session(pid, [session: "HOL"], 1)
 
-      assert {:error, {:connection_closed, :timeout}} = Shared.echo(pid, "after-timeout")
+      assert {:error, {:connection_closed, :timeout}} =
+               Shared.echo(pid, "after-timeout", format: :json)
 
       assert :ok = Shared.close(pid)
     end)
@@ -351,7 +354,12 @@ defmodule IsabelleClient.SharedTest do
                timeout: IsabelleTestSupport.session_timeout()
              )
 
-    assert {:ok, "ok"} = Shared.echo(pid, "ok")
+    assert {:ok, "ok"} = Shared.echo(pid, "ok", format: :json)
+    yxml = "\x05\x06example\x05λ\x05\x06\x05"
+    assert {:ok, {:yxml, ^yxml}} = Shared.command(pid, "echo", yxml)
+    text = :binary.copy("x", 8 * 1024 * 1024 + 1)
+    assert {:ok, path} = Shared.write_file(pid, "local.txt", text)
+    assert File.read!(path) == text
     assert :ok = Shared.close(pid)
   end
 
@@ -402,7 +410,7 @@ defmodule IsabelleClient.SharedTest do
                   "framed" => String.duplicate(Integer.to_string(rem(n, 10)), 160)
                 }
 
-                assert {:ok, ^payload} = Shared.echo(pid, payload)
+                assert {:ok, ^payload} = Shared.echo(pid, payload, format: :json)
 
               {:help, _n} ->
                 assert {:ok, commands} = Shared.help(pid)
@@ -438,7 +446,7 @@ defmodule IsabelleClient.SharedTest do
       assert is_binary(start_task.result["session_id"])
 
       assert {:ok, %{"phase" => "active_session"}} =
-               Shared.echo(pid, %{"phase" => "active_session"})
+               Shared.echo(pid, %{"phase" => "active_session"}, format: :json)
 
       theories = [
         {"Example1", "lemma \"x = x\"\n  by simp", "theorem ?x = ?x"},

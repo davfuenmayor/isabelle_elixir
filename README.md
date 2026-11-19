@@ -2,8 +2,9 @@
 
 Elixir clients for the [Isabelle](https://isabelle.in.tum.de/) server.
 
-The library talks to Isabelle's TCP server protocol directly. For protocol
-details, see chapter 4 of the
+The library works with the server included in a standard Isabelle installation.
+It speaks Isabelle's native protocol over TCP or through a WebSocket tunnel.
+For protocol details, see chapter 4 of the
 [Isabelle system manual](https://isabelle.in.tum.de/doc/system.pdf).
 
 ## Installation
@@ -16,7 +17,7 @@ Local server helpers need the Isabelle executable. Set `ISABELLE_TOOL` when
 `isabelle` is not already on `PATH`:
 
 ```sh
-export ISABELLE_TOOL=/path/to/Isabelle2025-2/bin/isabelle
+export ISABELLE_TOOL=/path/to/Isabelle2026/bin/isabelle
 ```
 
 ## Client profiles
@@ -87,26 +88,61 @@ already reachable, connect with its password, host, and port:
 ```elixir
 {:ok, client} =
   IsabelleClient.connect("server-password",
-    host: "isabelle.example.org",
+    host: "127.0.0.1",
     port: 9999
   )
 ```
 
 The same applies to `IsabelleClient.Shared` and `IsabelleClient.Raw`.
 
-For an [Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom) deployment, pass its HTTPS/WSS URL and native password:
+If the server is behind a WebSocket tunnel, pass its HTTPS or WSS address and
+the Isabelle server password:
 
 ```elixir
 {:ok, client} = IsabelleClient.connect(password, url: "https://isabelle.example.org/isabelle")
 # Or: IsabelleClient.Shared.connect(password: password, url: url)
 ```
 
-Remote URLs use certificate-verified WebSockets; loopback URLs use native TCP
-and assume an already running local server. Explicit host/port APIs remain TCP.
-`check_text` and TPTP loading place sources remotely. Use `write_file` for
-session-owned text, or the separate `create_project` / `write_project_file` /
-`remove_project` helpers for sources needed before a session exists. Server
-paths are not local files in the Livebook runtime.
+Non-loopback HTTPS and WSS URLs use certificate-verified WebSockets. Loopback
+URLs and explicit host/port connections use native TCP.
+
+On TCP, `write_file`, `check_text`, and TPTP loading write to the client's
+filesystem, where Isabelle must be able to read the files. Over WebSocket, they
+place files through the optional file commands provided by
+[Isabelle BYOM](https://github.com/davfuenmayor/isabelle-byom), with an 8 MiB
+limit per UTF-8 write. The `create_project`, `write_project_file`, and
+`remove_project` helpers use the same extension for sources that need to exist
+before a session starts.
+
+A connection closed before authentication completes returns
+`{:error, {:authentication_failed, :closed}}`. Check the server status and
+current native password. Isabelle closes the socket for invalid passwords and
+generates a new password when the server restarts.
+
+### Select a command argument format
+
+`IsabelleClient.command/4`, `IsabelleClient.Shared.command/4`, and
+`IsabelleClient.Raw.command/4` accept `format: :json` or `format: :yxml` in
+their options. YXML is the default and takes a pre-encoded element. Pass
+`format: :json` to send Elixir values as JSON. Each Isabelle command determines
+which formats it accepts. For example, `echo` accepts both, while
+`session_start` expects JSON. Helpers such as `start_session` and
+`use_theories` select the format Isabelle requires.
+
+```elixir
+{:ok, %{"message" => "hello"}} =
+  IsabelleClient.command(client, "echo", %{message: "hello"}, format: :json)
+
+yxml = "\x05\x06example\x05hello\x05\x06\x05"
+{:ok, {:yxml, ^yxml}} =
+  IsabelleClient.command(client, "echo", yxml, timeout: 5_000)
+```
+
+The option selects the argument format. Omit the argument or pass `nil` for
+commands such as `help` that take none. Replies are decoded according to what
+Isabelle sends. `echo/3` and `IsabelleClient.Raw.async_command/4` accept the same
+options. See sections 1.6 and 4.2 of the Isabelle System Manual for YXML and
+message framing.
 
 ## Sessions
 

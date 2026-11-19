@@ -1,10 +1,3 @@
-isabelle_bin = Path.expand("../../Isabelle2025-2/bin", __DIR__)
-isabelle_tool = Path.join(isabelle_bin, "isabelle")
-
-if File.exists?(isabelle_tool) do
-  System.put_env("ISABELLE_TOOL", isabelle_tool)
-end
-
 ExUnit.start()
 
 defmodule IsabelleTestSupport do

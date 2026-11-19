@@ -19,9 +19,13 @@ defmodule IsabelleClient.RawTest do
       IsabelleTestSupport.assert_commands(commands)
 
       assert {:ok, %{"client" => "raw", "n" => 1}} =
-               Raw.command(socket, "echo", client: "raw", n: 1)
+               Raw.command(socket, "echo", [client: "raw", n: 1], format: :json)
 
-      assert {:ok, "plain string"} = Raw.echo(socket, "plain string")
+      assert {:ok, "plain string"} = Raw.echo(socket, "plain string", format: :json)
+
+      yxml = "\x05\x06example\x06key=λ\x05" <> String.duplicate("λ", 110) <> "\x05\x06\x05"
+      assert {:ok, {:yxml, ^yxml}} = Raw.echo(socket, yxml)
+      assert {:ok, {:yxml, ^yxml}} = Raw.echo(socket, yxml, format: :yxml, timeout: 5_000)
 
       assert {:ok, nil} =
                Raw.cancel_task(socket, "00000000-0000-0000-0000-000000000000")
@@ -140,7 +144,7 @@ defmodule IsabelleClient.RawTest do
         %{"kind" => "nodes_status", "nodes_status" => []}
       ])
 
-    assert {:ok, %{"ok" => true}} = Raw.command(socket, "echo", %{"ok" => true})
+    assert {:ok, %{"ok" => true}} = Raw.command(socket, "echo", %{"ok" => true}, format: :json)
 
     assert_receive {:command, "echo " <> json}
     assert JSON.decode!(json) == %{"ok" => true}
