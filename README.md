@@ -103,8 +103,9 @@ the Isabelle server password:
 # Or: IsabelleClient.Shared.connect(password: password, url: url)
 ```
 
-Non-loopback HTTPS and WSS URLs use certificate-verified WebSockets. Loopback
-URLs and explicit host/port connections use native TCP.
+HTTPS and WSS URLs use certificate-verified WebSockets. For an SSH tunnel,
+use a loopback URL such as `ws://127.0.0.1:8080/isabelle`. Loopback TCP URLs and
+explicit host/port connections use native TCP.
 
 On TCP, `write_file`, `check_text`, and TPTP loading write to the client's
 filesystem, where Isabelle must be able to read the files. Over WebSocket, they

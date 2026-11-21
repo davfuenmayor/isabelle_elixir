@@ -41,5 +41,30 @@ defmodule IsabelleClient.TransportTest do
   test "unencrypted non-loopback URLs are rejected" do
     assert {:error, :expected_loopback_or_https_url} =
              IsabelleClient.connect("secret", url: "http://example.org/isabelle")
+
+    assert {:error, :expected_loopback_or_https_url} =
+             IsabelleClient.connect("secret", url: "ws://example.org/isabelle")
+  end
+
+  test "an explicit loopback WebSocket URL upgrades at the requested path" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, packet: :http_bin])
+    {:ok, port} = :inet.port(listener)
+
+    server =
+      Task.async(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+
+        assert {:ok, {:http_request, :GET, {:abs_path, "/isabelle"}, {1, 1}}} =
+                 :gen_tcp.recv(socket, 0, 5_000)
+
+        :ok = :gen_tcp.send(socket, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+        :gen_tcp.close(socket)
+      end)
+
+    assert {:error, _} =
+             IsabelleClient.Transport.connect("ws://127.0.0.1:#{port}/isabelle", 5_000)
+
+    Task.await(server)
+    :gen_tcp.close(listener)
   end
 end

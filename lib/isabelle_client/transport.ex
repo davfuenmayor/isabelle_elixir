@@ -4,13 +4,17 @@ defmodule IsabelleClient.Transport do
 
   def connect(url, timeout) do
     uri = URI.parse(url)
+    loopback = uri.host in ["localhost", "127.0.0.1", "::1"]
 
     cond do
-      uri.host in ["localhost", "127.0.0.1", "::1"] ->
-        connect(uri.host, uri.port || 9999, timeout)
-
       uri.scheme in ["https", "wss"] and is_binary(uri.host) ->
         WebSocket.connect(URI.to_string(%{uri | scheme: "wss"}), timeout)
+
+      uri.scheme == "ws" and loopback ->
+        WebSocket.connect(url, timeout)
+
+      loopback ->
+        connect(uri.host, uri.port || 9999, timeout)
 
       true ->
         {:error, :expected_loopback_or_https_url}

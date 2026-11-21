@@ -45,7 +45,8 @@ defmodule IsabelleClient.Raw do
 
   @doc """
   Connects using a loopback TCP URL or an HTTPS/WSS tunnel that carries
-  the Isabelle server protocol.
+  the Isabelle server protocol. Use a loopback `ws://` URL for a local
+  SSH port forward.
   """
   def connect_url(url, password, timeout \\ @timeout) do
     with {:ok, socket} <- IsabelleClient.Transport.connect(url, timeout) do

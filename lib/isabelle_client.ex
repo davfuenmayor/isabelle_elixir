@@ -49,7 +49,8 @@ defmodule IsabelleClient do
   Pass a `%IsabelleClient.Server.Info{}` returned by `start_server/1`, or pass
   the server password with explicit `:host` and `:port` options for an already
   running server. Pass `:url` for a loopback TCP address or an HTTPS/WSS
-  address that tunnels the Isabelle server protocol.
+  address that tunnels the Isabelle server protocol. A loopback `ws://` URL
+  can also connect through a local SSH port forward.
   """
   def connect(server_or_password, opts \\ [])
 
